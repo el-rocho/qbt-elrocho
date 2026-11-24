@@ -20,6 +20,7 @@ from PySide6.QtWidgets import (
     QPushButton,
     QTableWidget,
     QTableWidgetItem,
+    QTabWidget,
     QVBoxLayout,
     QWidget,
 )
@@ -36,6 +37,19 @@ DEFAULT_PATHS = (
 PATH_KEYS = ("peliculas", "series", "libros")
 PATH_LABELS = ("Películas", "Series", "Libros")
 QUERY_TIMEOUT = 6.0  # inactividad por operación de socket, no plazo total
+IDLE_CONNECTION_TEXT = (
+    "Sin conexión. Pulse «Consultar versión» o consulte desde una pestaña; "
+    "no se guardan credenciales."
+)
+IDLE_TORRENTS_TEXT = (
+    "Sin consultar. Pulse «Consultar torrents» para leer la lista remota (solo lectura)."
+)
+IDLE_DIRECTORY_TEXT = (
+    "Sin consultar. Elija una ruta y pulse «Consultar directorio» para ver el nivel inmediato."
+)
+# Contexto de las validaciones locales de la pestaña «Archivos descargados»:
+# se usa el prefijo para enrutar también los errores previos a la consulta.
+DIRECTORY_CONTEXT = "directory:"
 
 
 def validate_base_url(raw: str) -> str:
@@ -116,7 +130,7 @@ def _format_progress(progress: float | None) -> str:
 
 class _QuerySignals(QObject):
     succeeded = Signal(int, str, object)
-    failed = Signal(int, str)
+    failed = Signal(int, str, str)
     finished = Signal(int)
 
 
@@ -146,11 +160,13 @@ class _QueryTask(QRunnable):
             result = self._operation()
         except QBittorrentError as exc:
             if not self._cancelled.is_set():
-                self._signals.failed.emit(self.request_id, str(exc))
+                self._signals.failed.emit(self.request_id, self._context, str(exc))
         except Exception:
             if not self._cancelled.is_set():
                 self._signals.failed.emit(
-                    self.request_id, "Error inesperado al consultar qBittorrent"
+                    self.request_id,
+                    self._context,
+                    "Error inesperado al consultar qBittorrent",
                 )
         else:
             if not self._cancelled.is_set():
@@ -168,6 +184,7 @@ class MainWindow(QMainWindow):
         self._closing = False
         self._cancel_requested = False
         self._active_id: int | None = None
+        self._active_context: str | None = None
         self._request_id = 0
         self._tasks: dict[int, _QueryTask] = {}
         # Grupo propio (no el global) para que la ventana no arrastre trabajos
@@ -179,6 +196,7 @@ class MainWindow(QMainWindow):
         root = QVBoxLayout(central)
 
         local_group = QGroupBox("Revisión local (sin conexión)")
+        self.local_group = local_group
         local_layout = QVBoxLayout(local_group)
         add_button = QPushButton("Añadir archivos .torrent…")
         add_button.clicked.connect(self.add_files)
@@ -196,6 +214,7 @@ class MainWindow(QMainWindow):
         root.addWidget(local_group)
 
         remote_group = QGroupBox("qBittorrent — consulta de solo lectura")
+        self.remote_group = remote_group
         remote_layout = QVBoxLayout(remote_group)
 
         url_row = QHBoxLayout()
@@ -206,24 +225,35 @@ class MainWindow(QMainWindow):
         url_row.addWidget(self.url_edit, 1)
         self.version_button = QPushButton("Consultar versión")
         self.version_button.clicked.connect(self.query_version)
-        self.torrents_button = QPushButton("Consultar torrents")
-        self.torrents_button.clicked.connect(self.query_torrents)
+        url_row.addWidget(self.version_button)
         self.cancel_button = QPushButton("Cancelar consulta")
         self.cancel_button.setEnabled(False)
         self.cancel_button.clicked.connect(self.cancel_query)
-        url_row.addWidget(self.version_button)
-        url_row.addWidget(self.torrents_button)
         url_row.addWidget(self.cancel_button)
         remote_layout.addLayout(url_row)
 
-        self.status_label = QLabel(
-            "Sin conexión. Pulse «Consultar» para leer la instancia remota; no se guardan credenciales."
-        )
-        self.status_label.setWordWrap(True)
+        # Cabecera común: URL, versión y mensajes de conexión/validación de URL.
+        self.connection_label = QLabel(IDLE_CONNECTION_TEXT)
+        self.connection_label.setWordWrap(True)
         # Las rutas remotas pueden contener "<" o "&": nunca interpretar HTML.
-        self.status_label.setTextFormat(Qt.TextFormat.PlainText)
-        remote_layout.addWidget(self.status_label)
+        self.connection_label.setTextFormat(Qt.TextFormat.PlainText)
+        remote_layout.addWidget(self.connection_label)
 
+        self.remote_tabs = QTabWidget()
+        remote_layout.addWidget(self.remote_tabs, 1)
+
+        torrents_page = QWidget()
+        torrents_layout = QVBoxLayout(torrents_page)
+        torrents_row = QHBoxLayout()
+        self.torrents_button = QPushButton("Consultar torrents")
+        self.torrents_button.clicked.connect(self.query_torrents)
+        torrents_row.addWidget(self.torrents_button)
+        torrents_row.addStretch(1)
+        torrents_layout.addLayout(torrents_row)
+        self.torrents_status_label = QLabel(IDLE_TORRENTS_TEXT)
+        self.torrents_status_label.setWordWrap(True)
+        self.torrents_status_label.setTextFormat(Qt.TextFormat.PlainText)
+        torrents_layout.addWidget(self.torrents_status_label)
         self.torrents_table = QTableWidget(0, 4)
         self.torrents_table.setHorizontalHeaderLabels(["Nombre", "Estado", "Progreso", "Destino"])
         self.torrents_table.horizontalHeader().setStretchLastSection(False)
@@ -232,8 +262,11 @@ class MainWindow(QMainWindow):
             self.torrents_table.horizontalHeader().setSectionResizeMode(column, QHeaderView.ResizeToContents)
         self.torrents_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.torrents_table.setSelectionBehavior(QAbstractItemView.SelectRows)
-        remote_layout.addWidget(self.torrents_table, 2)
+        torrents_layout.addWidget(self.torrents_table, 1)
+        self.remote_tabs.addTab(torrents_page, "Torrents")
 
+        directory_page = QWidget()
+        directory_layout = QVBoxLayout(directory_page)
         paths_layout = QGridLayout()
         self.path_edits: dict[str, QLineEdit] = {}
         for row, (key, label, default) in enumerate(zip(PATH_KEYS, PATH_LABELS, DEFAULT_PATHS)):
@@ -243,7 +276,7 @@ class MainWindow(QMainWindow):
             edit.textChanged.connect(self._sync_paths)
             self.path_edits[key] = edit
             paths_layout.addWidget(edit, row, 1)
-        remote_layout.addLayout(paths_layout)
+        directory_layout.addLayout(paths_layout)
 
         directory_row = QHBoxLayout()
         directory_row.addWidget(QLabel("Directorio a consultar:"))
@@ -253,7 +286,12 @@ class MainWindow(QMainWindow):
         self.directory_button = QPushButton("Consultar directorio")
         self.directory_button.clicked.connect(self.query_directory)
         directory_row.addWidget(self.directory_button)
-        remote_layout.addLayout(directory_row)
+        directory_layout.addLayout(directory_row)
+
+        self.directory_status_label = QLabel(IDLE_DIRECTORY_TEXT)
+        self.directory_status_label.setWordWrap(True)
+        self.directory_status_label.setTextFormat(Qt.TextFormat.PlainText)
+        directory_layout.addWidget(self.directory_status_label)
 
         self.directory_table = QTableWidget(0, 3)
         self.directory_table.setHorizontalHeaderLabels(["Nombre", "Tipo", "Tamaño"])
@@ -263,7 +301,8 @@ class MainWindow(QMainWindow):
         self.directory_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeToContents)
         self.directory_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.directory_table.setSelectionBehavior(QAbstractItemView.SelectRows)
-        remote_layout.addWidget(self.directory_table, 1)
+        directory_layout.addWidget(self.directory_table, 1)
+        self.remote_tabs.addTab(directory_page, "Archivos descargados")
 
         root.addWidget(remote_group, 1)
         self.setCentralWidget(central)
@@ -301,17 +340,26 @@ class MainWindow(QMainWindow):
             self.directory_combo.setItemText(position, text or DEFAULT_PATHS[position])
         self.directory_combo.setCurrentIndex(index)
 
-    def _show_error(self, message: str) -> None:
-        self.status_label.setStyleSheet("color: #b00020;")
-        self.status_label.setText(f"Error: {message}")
+    def _label_for_context(self, context: str) -> QLabel:
+        """Etiqueta de origen de la consulta, no la pestaña visible al responder."""
+        if context == "torrents":
+            return self.torrents_status_label
+        if context.startswith("directory:"):
+            return self.directory_status_label
+        return self.connection_label
 
-    def _show_status(self, message: str) -> None:
-        self.status_label.setStyleSheet("color: #1a7f37;")
-        self.status_label.setText(message)
+    def _show(self, label: QLabel, style: str, message: str) -> None:
+        label.setStyleSheet(style)
+        label.setText(message)
 
-    def _show_neutral(self, message: str) -> None:
-        self.status_label.setStyleSheet("")
-        self.status_label.setText(message)
+    def _show_error(self, message: str, context: str = "version") -> None:
+        self._show(self._label_for_context(context), "color: #b00020;", f"Error: {message}")
+
+    def _show_status(self, message: str, context: str = "version") -> None:
+        self._show(self._label_for_context(context), "color: #1a7f37;", message)
+
+    def _show_neutral(self, message: str, context: str = "version") -> None:
+        self._show(self._label_for_context(context), "", message)
 
     def _set_busy(self, busy: bool) -> None:
         self.busy = busy
@@ -329,18 +377,20 @@ class MainWindow(QMainWindow):
         had_rows = bool(self.torrents_table.rowCount() or self.directory_table.rowCount())
         self.torrents_table.setRowCount(0)
         self.directory_table.setRowCount(0)
+        # Las etiquetas de cada pestaña no deben seguir afirmando datos del
+        # servidor anterior: vuelven a su texto inicial.
+        self._show_neutral(IDLE_TORRENTS_TEXT, "torrents")
+        self._show_neutral(IDLE_DIRECTORY_TEXT, DIRECTORY_CONTEXT)
         if self.busy:
             self.cancel_query()
             return
         if had_rows:
             self._show_neutral(
                 "URL cambiada: se han descartado los resultados del servidor anterior. "
-                "Pulse «Consultar» para leer el nuevo servidor."
+                "Consulte de nuevo en la pestaña correspondiente."
             )
         else:
-            self._show_neutral(
-                "Sin conexión. Pulse «Consultar» para leer la instancia remota; no se guardan credenciales."
-            )
+            self._show_neutral(IDLE_CONNECTION_TEXT)
 
     def _start_query(self, operation, context: str, busy_text: str) -> None:
         if self.busy or self._closing:
@@ -348,7 +398,7 @@ class MainWindow(QMainWindow):
         try:
             base_url = validate_base_url(self.url_edit.text())
         except ValueError as exc:
-            self._show_error(str(exc))
+            self._show_error(str(exc), context)
             return
         client = QBittorrentClient(base_url, timeout=QUERY_TIMEOUT)
         self._request_id += 1
@@ -360,9 +410,12 @@ class MainWindow(QMainWindow):
         task = _QueryTask(request_id, lambda: operation(client), context, signals)
         self._tasks[request_id] = task
         self._active_id = request_id
+        # El contexto se captura al iniciar: los mensajes posteriores vuelven a
+        # la pestaña de origen aunque el usuario cambie de pestaña entretanto.
+        self._active_context = context
         self._cancel_requested = False
         self._set_busy(True)
-        self._show_status(busy_text)
+        self._show_status(busy_text, context)
         self._pool.start(task)
 
     def query_version(self) -> None:
@@ -380,10 +433,12 @@ class MainWindow(QMainWindow):
     def query_directory(self) -> None:
         path = self.directory_combo.currentText().strip()
         if not path:
-            self._show_error("Indique una ruta de directorio.")
+            self._show_error("Indique una ruta de directorio.", DIRECTORY_CONTEXT)
             return
         if not path.startswith("/"):
-            self._show_error("La ruta del directorio debe ser absoluta (empezar por /).")
+            self._show_error(
+                "La ruta del directorio debe ser absoluta (empezar por /).", DIRECTORY_CONTEXT
+            )
             return
         self._start_query(
             lambda client: client.directory_content(path, with_metadata=True),
@@ -402,7 +457,8 @@ class MainWindow(QMainWindow):
         self.cancel_button.setEnabled(False)
         self._show_neutral(
             "Cancelación solicitada: se descarta la respuesta. No se puede lanzar otra "
-            "consulta hasta que termine la actual."
+            "consulta hasta que termine la actual.",
+            self._active_context or "version",
         )
 
     @Slot(int, str, object)
@@ -410,22 +466,31 @@ class MainWindow(QMainWindow):
         if self._closing or self._cancel_requested or request_id != self._active_id:
             return
         if context == "version":
-            self._show_status(f"Conectado. Versión de qBittorrent: {payload}")
+            self._show_status(f"Conectado. Versión de qBittorrent: {payload}", context)
         elif context == "torrents":
             self._fill_torrents(payload)
-            self._show_status(f"{len(payload)} torrent(s) recibidos en modo solo lectura.")
+            self._show_status(
+                f"{len(payload)} torrent(s) recibidos en modo solo lectura.", context
+            )
         elif context.startswith("directory:"):
             path = context.split(":", 1)[1]
             self._fill_directory(payload)
-            self._show_status(f"{len(payload)} entrada(s) en {path} (solo el nivel inmediato).")
+            self._show_status(
+                f"{len(payload)} entrada(s) en {path} (solo el nivel inmediato).", context
+            )
 
-    @Slot(int, str)
-    def _on_failure(self, request_id: int, message: str) -> None:
+    @Slot(int, str, str)
+    def _on_failure(self, request_id: int, context: str, message: str) -> None:
         if self._closing or self._cancel_requested or request_id != self._active_id:
             return
-        if self.torrents_table.rowCount() or self.directory_table.rowCount():
+        rows = 0
+        if context == "torrents":
+            rows = self.torrents_table.rowCount()
+        elif context.startswith("directory:"):
+            rows = self.directory_table.rowCount()
+        if rows:
             message += " Se mantienen los últimos datos mostrados."
-        self._show_error(message)
+        self._show_error(message, context)
 
     @Slot(int)
     def _on_finished(self, request_id: int) -> None:
@@ -433,7 +498,9 @@ class MainWindow(QMainWindow):
         if request_id != self._active_id:
             return
         cancelled = self._cancel_requested
+        context = self._active_context or "version"
         self._active_id = None
+        self._active_context = None
         self._cancel_requested = False
         self._set_busy(False)
         if self._closing:
@@ -443,7 +510,9 @@ class MainWindow(QMainWindow):
                 self.close()
             return
         if cancelled:
-            self._show_neutral("Consulta cancelada; no se muestran datos de esa consulta.")
+            self._show_neutral(
+                "Consulta cancelada; no se muestran datos de esa consulta.", context
+            )
 
     def _fill_torrents(self, torrents: list[dict]) -> None:
         self.torrents_table.setRowCount(0)

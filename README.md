@@ -21,33 +21,49 @@ prueba de la interfaz contra el servidor real queda pendiente.
 
 ## Interfaz
 
-- **Revisión local:** selección de `.torrent` y clasificación heurística en una
-  tabla independiente. No abre conexiones ni envía archivos.
-- **Consulta remota (solo lectura):** URL editable solo cuando no hay trabajo,
-  por defecto `http://10.0.4.56:8080`. Botones «Consultar versión» y «Consultar
-  torrents». Mientras hay una consulta, los botones y la URL quedan
-  deshabilitados, se muestra el estado ocupado y se habilita «Cancelar
-  consulta». Si se cambia la URL cuando no hay trabajo, se vacían las tablas
-  para no atribuir datos del servidor anterior al nuevo.
-- **Tabla de torrents:** solo lectura; muestra nombre, estado traducido,
-  progreso y destino (`save_path`). No se puede editar.
-- **Directorios:** rutas configurables, por defecto
+La ventana mantiene dos secciones verticales: arriba la **revisión local** y
+abajo la **consulta remota**, que se organiza en dos pestañas.
+
+- **Revisión local (superior):** selección de `.torrent` y clasificación
+  heurística en una tabla independiente de las pestañas. No abre conexiones ni
+  envía archivos.
+- **Cabecera común de qBittorrent:** URL editable solo cuando no hay trabajo
+  (por defecto `http://10.0.4.56:8080`), botón «Consultar versión» y botón
+  «Cancelar consulta». Los mensajes de «Consultar versión» aparecen en la
+  etiqueta común bajo la URL.
+- **Pestaña «Torrents»:** botón «Consultar torrents», su etiqueta de estado y
+  la tabla de solo lectura con nombre, estado traducido, progreso y destino
+  (`save_path`). La tabla no se puede editar.
+- **Pestaña «Archivos descargados»:** rutas configurables (por defecto
   `/mnt/descargas/peliculas`, `/mnt/descargas/series` y
-  `/mnt/descargas/libros`. El selector permite elegir una de ellas y
-  «Consultar directorio» pide explícitamente el nivel inmediato; no hay
-  recursividad.
-- **Errores:** se muestran en la barra de estado como texto plano (nunca se
-  interpreta HTML, aunque la ruta remota contenga `<` o `&`). Un `403` se
-  informa como acceso no autorizado. Si falla una consulta se conservan los
-  últimos datos válidos del mismo servidor y se avisa de ello; si no había
-  datos, la tabla queda vacía.
+  `/mnt/descargas/libros`), selector de directorio, botón «Consultar
+  directorio» —que pide explícitamente el nivel inmediato, sin recursividad—,
+  su propia etiqueta de estado y la tabla de archivos y carpetas.
+- **Mensajes por pestaña:** cada consulta escribe su estado (ocupado, éxito,
+  error, cancelación y validación de ruta) en la etiqueta de la pestaña donde
+  se lanzó. El contexto se captura al iniciar la consulta, no al recibir la
+  respuesta, así que los mensajes siguen apareciendo en su pestaña aunque el
+  usuario cambie de pestaña mientras la consulta está en curso. Las dos
+  pestañas tienen tablas separadas: una consulta no vacía, rellena ni
+  modifica la tabla de la otra.
+- **Errores:** se muestran como texto plano (nunca se interpreta HTML, aunque
+  la ruta remota contenga `<` o `&`). Un `403` se informa como acceso no
+  autorizado. Si falla una consulta se conservan los últimos datos válidos de
+  esa misma pestaña y se avisa de ello; si esa tabla no tenía datos, no se
+  afirma nada sobre conservación y queda como estaba.
 - **URL:** admite `http(s)://host[:puerto]` y un prefijo de ruta opcional.
   Se rechazan IPv6 mal formadas (por ejemplo
   `http://[::1`), puertos no numéricos o fuera de 1–65535, credenciales
   embebidas (`usuario:clave@`), query y fragmento. El error se muestra en la
-  barra de estado y no se envía ninguna petición.
+  etiqueta de la consulta que se intentó iniciar y no se envía ninguna petición.
 - **Sin conexión automática:** la ventana no consulta nada al arrancar. No se
   guardan credenciales ni claves; la URL no se persiste.
+
+### Capturas
+
+Las imágenes de `docs/capturas/` se generaron con datos **DEMO** (ficticios) y
+sin red: `qbt_ui_pestana_torrents.png` y `qbt_ui_pestana_archivos.png`. No son
+lecturas de un servidor real.
 
 ## Límites y seguridad
 
@@ -99,6 +115,7 @@ vigilancia de carpetas, SQLite ni almacenamiento de secretos.
 ```
 src/qbt/      interfaz, clasificación y cliente API de solo lectura
 tests/        pruebas del clasificador, del cliente y de la interfaz Qt
+docs/capturas capturas de la interfaz con datos DEMO (ficticios, sin red)
 ```
 
 ## Pruebas

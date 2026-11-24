@@ -12,7 +12,14 @@ from PySide6.QtCore import Qt
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QAbstractItemView, QApplication
 
-from qbt.app import DEFAULT_PATHS, DEFAULT_URL, MainWindow
+from qbt.app import (
+    DEFAULT_PATHS,
+    DEFAULT_URL,
+    IDLE_CONNECTION_TEXT,
+    IDLE_DIRECTORY_TEXT,
+    IDLE_TORRENTS_TEXT,
+    MainWindow,
+)
 
 
 class _Handler(BaseHTTPRequestHandler):
@@ -129,6 +136,216 @@ class MainWindowTests(unittest.TestCase):
             window.close()
             window.deleteLater()
 
+    def test_remote_section_has_two_tabs_with_their_own_widgets(self):
+        tabs = self.window.remote_tabs
+        self.assertEqual(tabs.count(), 2)
+        self.assertEqual(tabs.tabText(0), "Torrents")
+        self.assertEqual(tabs.tabText(1), "Archivos descargados")
+        torrents_page, directory_page = tabs.widget(0), tabs.widget(1)
+        for widget in (
+            self.window.torrents_table,
+            self.window.torrents_button,
+            self.window.torrents_status_label,
+        ):
+            self.assertTrue(torrents_page.isAncestorOf(widget))
+        for widget in (
+            self.window.directory_table,
+            self.window.directory_button,
+            self.window.directory_combo,
+            self.window.directory_status_label,
+            *self.window.path_edits.values(),
+        ):
+            self.assertTrue(directory_page.isAncestorOf(widget))
+        # Ninguna tabla ni etiqueta se comparte entre pestañas.
+        self.assertFalse(torrents_page.isAncestorOf(self.window.directory_table))
+        self.assertFalse(torrents_page.isAncestorOf(self.window.directory_status_label))
+        self.assertFalse(directory_page.isAncestorOf(self.window.torrents_table))
+        self.assertFalse(directory_page.isAncestorOf(self.window.torrents_status_label))
+        # La cabecera común (URL, versión, mensajes de conexión) queda fuera
+        # de las pestañas y la revisión local se mantiene como sección superior.
+        for widget in (
+            self.window.url_edit,
+            self.window.version_button,
+            self.window.connection_label,
+        ):
+            self.assertFalse(torrents_page.isAncestorOf(widget))
+            self.assertFalse(directory_page.isAncestorOf(widget))
+        self.assertFalse(torrents_page.isAncestorOf(self.window.local_table))
+        layout = self.window.centralWidget().layout()
+        self.assertLess(
+            layout.indexOf(self.window.local_group),
+            layout.indexOf(self.window.remote_group),
+        )
+        for label in (
+            self.window.connection_label,
+            self.window.torrents_status_label,
+            self.window.directory_status_label,
+        ):
+            self.assertEqual(label.textFormat(), Qt.TextFormat.PlainText)
+
+    def test_torrents_messages_stay_in_torrents_tab_when_user_switches_tab(self):
+        self.route(self.TORRENTS_PATH, self.TORRENTS_BODY, delay=0.2)
+        directory_before = self.window.directory_status_label.text()
+        self.window.query_torrents()
+        self.assertIn("Consultando torrents", self.window.torrents_status_label.text())
+        # El usuario cambia de pestaña mientras la consulta sigue en curso.
+        self.window.remote_tabs.setCurrentIndex(1)
+        self.assertTrue(wait_until(lambda: not self.window.busy))
+        self.assertIn("2 torrent", self.window.torrents_status_label.text())
+        self.assertEqual(self.window.directory_status_label.text(), directory_before)
+        self.assertEqual(self.window.remote_tabs.currentIndex(), 1)
+
+    def test_torrents_error_is_reported_in_torrents_tab_after_switching_tab(self):
+        self.route(self.TORRENTS_PATH, b"", status=403)
+        directory_before = self.window.directory_status_label.text()
+        self.window.query_torrents()
+        self.window.remote_tabs.setCurrentIndex(1)
+        self.assertTrue(wait_until(lambda: not self.window.busy))
+        self.assertIn("403", self.window.torrents_status_label.text())
+        self.assertIn("no autorizado", self.window.torrents_status_label.text().lower())
+        self.assertEqual(self.window.directory_status_label.text(), directory_before)
+        self.assertNotIn("403", self.window.directory_status_label.text())
+
+    def test_directory_messages_stay_in_directory_tab_when_user_switches_tab(self):
+        path = "/mnt/descargas/series"
+        encoded = "/api/v2/app/getDirectoryContent?" + urlencode(
+            {"dirPath": path, "withMetadata": "true"}
+        )
+        self.route(encoded, json.dumps([{"name": "Serie", "type": "dir"}]))
+        self.window.path_edits["series"].setText(path)
+        self.window.directory_combo.setCurrentIndex(1)
+        torrents_before = self.window.torrents_status_label.text()
+        self.window.remote_tabs.setCurrentIndex(0)
+        self.window.query_directory()
+        self.assertIn("Consultando el nivel inmediato", self.window.directory_status_label.text())
+        self.assertTrue(wait_until(lambda: not self.window.busy))
+        self.assertIn("1 entrada", self.window.directory_status_label.text())
+        self.assertEqual(self.window.torrents_status_label.text(), torrents_before)
+        self.assertEqual(self.window.remote_tabs.currentIndex(), 0)
+
+    def test_directory_path_validation_error_is_reported_in_directory_tab(self):
+        self.window.path_edits["peliculas"].setText("relativa/sin/barra")
+        self.window.directory_combo.setCurrentIndex(0)
+        self.window.remote_tabs.setCurrentIndex(0)
+        self.window.query_directory()
+        self.assertIn("absoluta", self.window.directory_status_label.text())
+        self.assertEqual(self.window.connection_label.text(), IDLE_CONNECTION_TEXT)
+        self.assertEqual(self.window.torrents_status_label.text(), IDLE_TORRENTS_TEXT)
+        self.assertEqual(self.requests(), [])
+
+    def test_cancellation_messages_stay_in_origin_tab_after_switching_tab(self):
+        self.route(self.TORRENTS_PATH, self.TORRENTS_BODY, delay=0.4)
+        directory_before = self.window.directory_status_label.text()
+        self.window.query_torrents()
+        self.assertTrue(wait_until(lambda: len(self.requests()) >= 1))
+        self.window.remote_tabs.setCurrentIndex(1)
+        self.window.cancel_query()
+        self.assertIn("cancelación", self.window.torrents_status_label.text().lower())
+        self.assertEqual(self.window.directory_status_label.text(), directory_before)
+        self.assertTrue(wait_until(lambda: not self.window.busy))
+        self.assertIn("cancelada", self.window.torrents_status_label.text().lower())
+        self.assertEqual(self.window.directory_status_label.text(), directory_before)
+
+    def test_directory_cancellation_is_reported_in_directory_tab(self):
+        path = "/mnt/descargas/peliculas"
+        encoded = "/api/v2/app/getDirectoryContent?" + urlencode(
+            {"dirPath": path, "withMetadata": "true"}
+        )
+        self.route(encoded, json.dumps([{"name": "x", "type": "dir"}]), delay=0.4)
+        torrents_before = self.window.torrents_status_label.text()
+        self.window.remote_tabs.setCurrentIndex(1)
+        self.window.query_directory()
+        self.assertTrue(wait_until(lambda: len(self.requests()) >= 1))
+        self.window.remote_tabs.setCurrentIndex(0)
+        self.window.cancel_query()
+        self.assertIn("cancel", self.window.directory_status_label.text().lower())
+        self.assertTrue(wait_until(lambda: not self.window.busy))
+        self.assertIn("cancelada", self.window.directory_status_label.text().lower())
+        self.assertEqual(self.window.torrents_status_label.text(), torrents_before)
+        self.assertEqual(self.window.directory_table.rowCount(), 0)
+
+    def test_directory_failure_is_reported_in_directory_tab_after_switching_tab(self):
+        path = "/mnt/descargas/libros"
+        encoded = "/api/v2/app/getDirectoryContent?" + urlencode(
+            {"dirPath": path, "withMetadata": "true"}
+        )
+        self.route(encoded, b"", status=500)
+        torrents_before = self.window.torrents_status_label.text()
+        self.window.path_edits["libros"].setText(path)
+        self.window.directory_combo.setCurrentIndex(2)
+        self.window.remote_tabs.setCurrentIndex(1)
+        self.window.query_directory()
+        self.window.remote_tabs.setCurrentIndex(0)
+        self.assertTrue(wait_until(lambda: not self.window.busy))
+        self.assertIn("500", self.window.directory_status_label.text())
+        self.assertEqual(self.window.torrents_status_label.text(), torrents_before)
+        self.assertEqual(self.window.torrents_table.rowCount(), 0)
+
+    def test_failure_only_mentions_kept_rows_of_its_own_tab(self):
+        directory_path = "/mnt/descargas/peliculas"
+        encoded = "/api/v2/app/getDirectoryContent?" + urlencode(
+            {"dirPath": directory_path, "withMetadata": "true"}
+        )
+        self.route(self.TORRENTS_PATH, self.TORRENTS_BODY)
+        self.route(encoded, json.dumps([{"name": "Carpeta", "type": "dir"}]))
+        self.window.query_torrents()
+        self.assertTrue(wait_until(lambda: not self.window.busy))
+        self.window.query_directory()
+        self.assertTrue(wait_until(lambda: not self.window.busy))
+        self.assertEqual(self.window.torrents_table.rowCount(), 2)
+        self.assertEqual(self.window.directory_table.rowCount(), 1)
+
+        # Falla torrents: conserva sus filas y no toca la otra pestaña.
+        self.route(self.TORRENTS_PATH, b"", status=403)
+        directory_label_before = self.window.directory_status_label.text()
+        self.window.query_torrents()
+        self.assertTrue(wait_until(lambda: not self.window.busy))
+        self.assertIn("Se mantienen", self.window.torrents_status_label.text())
+        self.assertEqual(self.window.directory_status_label.text(), directory_label_before)
+        self.assertEqual(self.window.directory_table.rowCount(), 1)
+        self.assertEqual(self.window.torrents_table.rowCount(), 2)
+
+        # Falla el directorio: no hay filas propias previas que conservar,
+        # así que no debe afirmarlo ni alterar la tabla de torrents.
+        torrents_label_before = self.window.torrents_status_label.text()
+        self.window.directory_table.setRowCount(0)
+        self.route(encoded, b"", status=500)
+        self.window.query_directory()
+        self.assertTrue(wait_until(lambda: not self.window.busy))
+        self.assertNotIn("Se mantienen", self.window.directory_status_label.text())
+        self.assertIn("500", self.window.directory_status_label.text())
+        self.assertEqual(self.window.torrents_status_label.text(), torrents_label_before)
+        self.assertEqual(self.window.torrents_table.rowCount(), 2)
+        self.assertEqual(self.window.directory_table.rowCount(), 0)
+
+    def test_version_query_uses_common_header_and_keeps_both_tables(self):
+        self.route(self.TORRENTS_PATH, self.TORRENTS_BODY)
+        self.window.query_torrents()
+        self.assertTrue(wait_until(lambda: not self.window.busy))
+        torrents_summary = self.window.torrents_status_label.text()
+        directory_summary = self.window.directory_status_label.text()
+        self.route("/api/v2/app/version", "v5.3.0")
+        self.window.remote_tabs.setCurrentIndex(1)
+        self.window.query_version()
+        self.assertTrue(wait_until(lambda: not self.window.busy))
+        self.assertIn("v5.3.0", self.window.connection_label.text())
+        self.assertEqual(self.window.torrents_status_label.text(), torrents_summary)
+        self.assertEqual(self.window.directory_status_label.text(), directory_summary)
+        self.assertEqual(self.window.torrents_table.rowCount(), 2)
+        self.assertEqual(self.window.directory_table.rowCount(), 0)
+
+    def test_url_change_resets_tab_messages_and_tables_of_previous_server(self):
+        self.route(self.TORRENTS_PATH, self.TORRENTS_BODY)
+        self.window.query_torrents()
+        self.assertTrue(wait_until(lambda: not self.window.busy))
+        self.assertIn("2 torrent", self.window.torrents_status_label.text())
+        self.window.url_edit.setText("http://127.0.0.1:1")
+        self.assertEqual(self.window.torrents_table.rowCount(), 0)
+        self.assertEqual(self.window.directory_table.rowCount(), 0)
+        self.assertEqual(self.window.torrents_status_label.text(), IDLE_TORRENTS_TEXT)
+        self.assertEqual(self.window.directory_status_label.text(), IDLE_DIRECTORY_TEXT)
+        self.assertIn("descart", self.window.connection_label.text().lower())
+
     def test_version_query_shows_busy_state_and_result(self):
         self.route("/api/v2/app/version", "v5.3.0", delay=0.05)
         self.window.query_version()
@@ -136,7 +353,7 @@ class MainWindowTests(unittest.TestCase):
         self.assertFalse(self.window.version_button.isEnabled())
         self.assertTrue(self.window.cancel_button.isEnabled())
         self.assertTrue(wait_until(lambda: not self.window.busy))
-        self.assertIn("v5.3.0", self.window.status_label.text())
+        self.assertIn("v5.3.0", self.window.connection_label.text())
         self.assertEqual([r["path"] for r in self.requests()], ["/api/v2/app/version"])
         self.assertIsNone(self.requests()[0]["authorization"])
 
@@ -160,7 +377,7 @@ class MainWindowTests(unittest.TestCase):
         self.route(self.TORRENTS_PATH, b"", status=403)
         self.window.query_torrents()
         self.assertTrue(wait_until(lambda: not self.window.busy))
-        status = self.window.status_label.text().lower()
+        status = self.window.torrents_status_label.text().lower()
         self.assertIn("403", status)
         self.assertIn("no autorizado", status)
         self.assertEqual(self.window.torrents_table.rowCount(), 2)
@@ -169,14 +386,14 @@ class MainWindowTests(unittest.TestCase):
         self.route(self.TORRENTS_PATH, json.dumps({"name": "no es lista"}))
         self.window.query_torrents()
         self.assertTrue(wait_until(lambda: not self.window.busy))
-        self.assertIn("Error", self.window.status_label.text())
+        self.assertIn("Error", self.window.torrents_status_label.text())
         self.assertEqual(self.window.torrents_table.rowCount(), 0)
 
     def test_empty_body_is_error(self):
         self.route(self.TORRENTS_PATH, b"")
         self.window.query_torrents()
         self.assertTrue(wait_until(lambda: not self.window.busy))
-        self.assertIn("vacía", self.window.status_label.text())
+        self.assertIn("vacía", self.window.torrents_status_label.text())
 
     def test_duplicate_query_is_ignored_and_ui_not_blocked(self):
         self.route(self.TORRENTS_PATH, self.TORRENTS_BODY, delay=0.5)
@@ -201,14 +418,14 @@ class MainWindowTests(unittest.TestCase):
         self.assertFalse(self.window.torrents_button.isEnabled())
         self.assertFalse(self.window.version_button.isEnabled())
         self.assertFalse(self.window.url_edit.isEnabled())
-        self.assertIn("cancel", self.window.status_label.text().lower())
+        self.assertIn("cancel", self.window.torrents_status_label.text().lower())
         self.window.query_version()
         self.assertEqual(len(self.requests()), 1)
         self.assertEqual(len(self.window._tasks), 1)
         self.assertLessEqual(self.window._pool.activeThreadCount(), 1)
         self.assertTrue(wait_until(lambda: not self.window.busy))
         self.assertEqual(self.window.torrents_table.rowCount(), 0)
-        self.assertIn("cancel", self.window.status_label.text().lower())
+        self.assertIn("cancel", self.window.torrents_status_label.text().lower())
         self.assertTrue(self.window.torrents_button.isEnabled())
         self.assertTrue(self.window.url_edit.isEnabled())
 
@@ -217,12 +434,14 @@ class MainWindowTests(unittest.TestCase):
         self.window.query_torrents()
         request_id = self.window._active_id
         self.window.cancel_query()
-        status = self.window.status_label.text()
+        status = self.window.torrents_status_label.text()
+        directory_status = self.window.directory_status_label.text()
         # Una señal emitida antes de cancelar puede entregarse después en Qt.
         self.window._on_success(request_id, "torrents", json.loads(self.TORRENTS_BODY))
         self.assertEqual(self.window.torrents_table.rowCount(), 0)
-        self.window._on_failure(request_id, "Error tardío")
-        self.assertEqual(self.window.status_label.text(), status)
+        self.window._on_failure(request_id, "torrents", "Error tardío")
+        self.assertEqual(self.window.torrents_status_label.text(), status)
+        self.assertEqual(self.window.directory_status_label.text(), directory_status)
         self.assertTrue(wait_until(lambda: not self.window.busy))
 
     def test_cancelled_query_can_be_repeated_after_it_ends(self):
@@ -262,14 +481,23 @@ class MainWindowTests(unittest.TestCase):
                    entries)
         self.window.query_directory()
         self.assertTrue(wait_until(lambda: not self.window.busy))
-        self.assertIn("límite", self.window.status_label.text().lower())
+        self.assertIn("límite", self.window.directory_status_label.text().lower())
         self.assertEqual(self.window.directory_table.rowCount(), 0)
+
+    def test_version_error_does_not_claim_directory_rows_as_version_data(self):
+        self.window._fill_directory([{"name": "DEMO", "type": "dir"}])
+        self.route("/api/v2/app/version", b"", status=403)
+        self.window.query_version()
+        self.assertTrue(wait_until(lambda: not self.window.busy))
+        self.assertIn("403", self.window.connection_label.text())
+        self.assertNotIn("Se mantienen", self.window.connection_label.text())
+        self.assertEqual(self.window.directory_table.rowCount(), 1)
 
     def test_invalid_url_is_rejected_without_request(self):
         self.window.url_edit.setText("ftp://servidor")
         self.window.query_version()
         self.assertFalse(self.window.busy)
-        self.assertIn("URL", self.window.status_label.text())
+        self.assertIn("URL", self.window.connection_label.text())
         self.assertEqual(self.requests(), [])
 
     def test_malformed_or_unsafe_urls_are_rejected_without_crash(self):
@@ -289,10 +517,10 @@ class MainWindowTests(unittest.TestCase):
                 self.window.url_edit.setText(url)
                 self.window.query_version()
                 self.assertFalse(self.window.busy)
-                self.assertIn("URL", self.window.status_label.text())
+                self.assertIn("URL", self.window.connection_label.text())
                 self.assertEqual(self.requests(), [])
 
-    def test_status_label_renders_remote_paths_as_plain_text(self):
+    def test_tab_labels_render_remote_paths_as_plain_text(self):
         path = "/mnt/descargas/<b>series</b>"
         encoded = "/api/v2/app/getDirectoryContent?" + urlencode(
             {"dirPath": path, "withMetadata": "true"}
@@ -302,8 +530,10 @@ class MainWindowTests(unittest.TestCase):
         self.window.directory_combo.setCurrentIndex(1)
         self.window.query_directory()
         self.assertTrue(wait_until(lambda: not self.window.busy))
-        self.assertEqual(self.window.status_label.textFormat(), Qt.TextFormat.PlainText)
-        self.assertIn("<b>series</b>", self.window.status_label.text())
+        self.assertEqual(
+            self.window.directory_status_label.textFormat(), Qt.TextFormat.PlainText
+        )
+        self.assertIn("<b>series</b>", self.window.directory_status_label.text())
 
     def test_url_change_discards_previous_results(self):
         self.route(self.TORRENTS_PATH, self.TORRENTS_BODY)
@@ -320,7 +550,7 @@ class MainWindowTests(unittest.TestCase):
         self.window.url_edit.setText("http://127.0.0.1:1")
         self.assertEqual(self.window.torrents_table.rowCount(), 0)
         self.assertEqual(self.window.directory_table.rowCount(), 0)
-        self.assertIn("descart", self.window.status_label.text().lower())
+        self.assertIn("descart", self.window.connection_label.text().lower())
 
     def test_close_while_worker_active_defers_without_blocking(self):
         self.route("/api/v2/app/version", "v5.3.0", delay=0.5)
@@ -331,7 +561,7 @@ class MainWindowTests(unittest.TestCase):
         self.assertLess(time.monotonic() - started, 0.25)  # no hay waitForDone bloqueante
         self.assertTrue(self.window.isVisible())          # cierre diferido
         self.assertTrue(self.window.busy)
-        self.assertIn("cerr", self.window.status_label.text().lower())
+        self.assertIn("cerr", self.window.connection_label.text().lower())
         self.assertTrue(wait_until(lambda: not self.window.isVisible(), timeout=3.0))
         self.assertFalse(self.window.busy)
 
