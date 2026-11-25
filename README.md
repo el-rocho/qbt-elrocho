@@ -22,7 +22,9 @@ prueba de la interfaz contra el servidor real queda pendiente.
 ## Interfaz
 
 La ventana mantiene dos secciones verticales: arriba la **revisión local** y
-abajo la **consulta remota**, que se organiza en dos pestañas.
+abajo la **consulta remota**, que se organiza en dos pestañas. El panel remoto
+tiene un marco propio, títulos de pestaña ampliados y mayor separación respecto
+a la cabecera de conexión; Revisión local conserva su estilo.
 
 - **Revisión local (superior):** selección de `.torrent` y clasificación
   heurística en una tabla independiente de las pestañas. No abre conexiones ni
@@ -58,6 +60,20 @@ abajo la **consulta remota**, que se organiza en dos pestañas.
   etiqueta de la consulta que se intentó iniciar y no se envía ninguna petición.
 - **Sin conexión automática:** la ventana no consulta nada al arrancar. No se
   guardan credenciales ni claves; la URL no se persiste.
+
+### Ancho de columnas
+
+Las tres tablas permiten ajustar todas sus columnas arrastrando los separadores
+de la cabecera. Los anchos elegidos se conservan al consultar de nuevo y al
+cambiar el tamaño de la ventana, y también se guardan al cerrar la aplicación
+para restaurarlos la próxima vez que se abra. Si el fichero de preferencias
+estuviera corrupto se usan los anchos de fábrica, y si no se puede escribir al
+cerrar se avisa con un diálogo sin impedir la salida.
+
+Solo se persisten esos anchos, por tabla: la URL, las rutas, las credenciales y
+los torrents mostrados no se guardan. El fichero es
+`~/.config/el-rocho/qbt-elrocho.ini` (formato INI, ámbito de usuario). Los datos
+siguen siendo de solo lectura.
 
 ### Capturas
 

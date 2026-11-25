@@ -1,25 +1,36 @@
 import json
 import os
+import subprocess
+import sys
+import tempfile
+import textwrap
 import threading
 import time
 import unittest
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from unittest import mock
 from urllib.parse import parse_qs, urlencode, urlsplit
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QPoint, QSettings, Qt
 from PySide6.QtTest import QTest
-from PySide6.QtWidgets import QAbstractItemView, QApplication
+from PySide6.QtWidgets import QAbstractItemView, QApplication, QHeaderView
 
 from qbt.app import (
+    APPLICATION,
+    COLUMN_WIDTHS_GROUP,
+    DEFAULT_COLUMN_WIDTHS,
     DEFAULT_PATHS,
     DEFAULT_URL,
     IDLE_CONNECTION_TEXT,
     IDLE_DIRECTORY_TEXT,
     IDLE_TORRENTS_TEXT,
+    ORGANIZATION,
     MainWindow,
 )
+
+REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
 class _Handler(BaseHTTPRequestHandler):
@@ -63,6 +74,136 @@ def wait_until(predicate, timeout=4.0):
     return predicate()
 
 
+def settings_user_dir() -> str:
+    """Directorio que QSettings usa ahora para IniFormat/UserScope."""
+    probe = QSettings(
+        QSettings.Format.IniFormat, QSettings.Scope.UserScope, ORGANIZATION, APPLICATION
+    )
+    probe.setFallbacksEnabled(False)
+    return os.path.dirname(str(probe.fileName()))
+
+
+def isolate_settings(testcase, root: str) -> None:
+    """Redirige IniFormat/UserScope a ``root`` y restaura al terminar la prueba.
+
+    Ninguna prueba lee ni escribe las preferencias reales del usuario.
+    """
+    previous = settings_user_dir()
+    QSettings.setPath(QSettings.Format.IniFormat, QSettings.Scope.UserScope, root)
+    testcase.addCleanup(
+        QSettings.setPath, QSettings.Format.IniFormat, QSettings.Scope.UserScope, previous
+    )
+
+
+def settings_file(root: str) -> str:
+    return os.path.join(root, ORGANIZATION, f"{APPLICATION}.ini")
+
+
+def read_text(path: str) -> str:
+    with open(path, encoding="utf-8") as handle:
+        return handle.read()
+
+
+def window_tables(window: MainWindow) -> dict[str, object]:
+    return {
+        "local": window.local_table,
+        "torrents": window.torrents_table,
+        "directory": window.directory_table,
+    }
+
+
+def apply_widths(window: MainWindow, widths: dict[str, list[int]]) -> None:
+    tables = window_tables(window)
+    for name, values in widths.items():
+        for column, value in enumerate(values):
+            tables[name].setColumnWidth(column, value)
+
+
+def header_widths(window: MainWindow) -> dict[str, list[int]]:
+    return {
+        name: [
+            table.horizontalHeader().sectionSize(column)
+            for column in range(table.columnCount())
+        ]
+        for name, table in window_tables(window).items()
+    }
+
+
+class _MemorySettings:
+    """Preferencias en memoria: separa el cierre de la latencia real de disco."""
+
+    def __init__(self):
+        self.values = {}
+
+    def value(self, key, default=None):
+        return self.values.get(key, default)
+
+    def setValue(self, key, value):
+        self.values[key] = value
+
+    def sync(self):
+        pass
+
+    def status(self):
+        return QSettings.Status.NoError
+
+
+class _BrokenSettings:
+    """Sustituto de QSettings que falla al escribir (disco lleno, permisos...)."""
+
+    def value(self, _key, default=None):
+        return default
+
+    def setValue(self, _key, _value):
+        raise RuntimeError("no se pudo escribir")
+
+    def sync(self):
+        pass
+
+    def status(self):
+        return QSettings.Status.NoError
+
+
+_WRITE_WIDTHS_SCRIPT = textwrap.dedent(
+    """
+    import json, sys
+    from PySide6.QtWidgets import QApplication
+    from qbt.app import MainWindow
+
+    widths = json.loads(sys.argv[1])
+    app = QApplication([])
+    window = MainWindow()
+    tables = {"local": window.local_table, "torrents": window.torrents_table,
+              "directory": window.directory_table}
+    for name, values in widths.items():
+        for column, value in enumerate(values):
+            tables[name].setColumnWidth(column, value)
+    window.show()
+    app.processEvents()
+    window.close()
+    app.processEvents()
+    print(json.dumps({"closed": not window.isVisible()}))
+    """
+)
+
+_READ_WIDTHS_SCRIPT = textwrap.dedent(
+    """
+    import json
+    from PySide6.QtWidgets import QApplication
+    from qbt.app import MainWindow
+
+    app = QApplication([])
+    window = MainWindow()
+    tables = {"local": window.local_table, "torrents": window.torrents_table,
+              "directory": window.directory_table}
+    print(json.dumps({name: [t.horizontalHeader().sectionSize(i)
+                             for i in range(t.columnCount())]
+                      for name, t in tables.items()}))
+    window.close()
+    """
+)
+
+
 class MainWindowTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -85,6 +226,10 @@ class MainWindowTests(unittest.TestCase):
         with self.server.lock:
             self.server.routes = {}
             self.server.requests = []
+        # Preferencias aisladas: nunca se toca ~/.config/el-rocho real.
+        self.prefs = tempfile.TemporaryDirectory()
+        self.addCleanup(self.prefs.cleanup)
+        isolate_settings(self, self.prefs.name)
         self.window = MainWindow()
         self.window.url_edit.setText(self.base_url)
         self.window.show()
@@ -118,6 +263,49 @@ class MainWindowTests(unittest.TestCase):
         {"hash": "b", "name": "Serie B", "state": "pausedUP", "progress": 1.0,
          "save_path": "/mnt/descargas/series"},
     ])
+
+    # Anchos distintos de los de fábrica para cada columna de cada tabla.
+    CUSTOM_WIDTHS = {
+        "local": [171, 92, 233, 61, 118],
+        "torrents": [251, 133, 87, 209],
+        "directory": [311, 99, 123],
+    }
+
+    def test_remote_tabs_have_visual_separation_without_restyling_local_area(self):
+        QApplication.processEvents()
+        tabs = self.window.remote_tabs
+        gap = tabs.geometry().top() - self.window.connection_label.geometry().bottom()
+        self.assertGreaterEqual(gap, 16)
+        self.assertGreater(tabs.tabBar().font().pointSizeF(), self.window.font().pointSizeF())
+        self.assertIn("border: 1px solid palette(mid)", tabs.styleSheet())
+        self.assertEqual(self.window.local_group.styleSheet(), "")
+        self.assertEqual(self.window.local_table.font().pointSizeF(), self.window.font().pointSizeF())
+
+    def test_all_tables_allow_manual_column_widths(self):
+        for tab, table in ((0, self.window.local_table),
+                           (0, self.window.torrents_table),
+                           (1, self.window.directory_table)):
+            with self.subTest(table=table):
+                self.window.remote_tabs.setCurrentIndex(tab)
+                QApplication.processEvents()
+                header = table.horizontalHeader()
+                for column in range(table.columnCount()):
+                    self.assertEqual(header.sectionResizeMode(column), QHeaderView.Interactive)
+                    header.resizeSection(column, 130 + column * 10)
+                QApplication.processEvents()
+                start = QPoint(header.sectionViewportPosition(0) + header.sectionSize(0) - 1,
+                               header.height() // 2)
+                QTest.mousePress(header.viewport(), Qt.LeftButton, pos=start)
+                QTest.mouseMove(header.viewport(), start + QPoint(40, 0), delay=20)
+                QTest.mouseRelease(header.viewport(), Qt.LeftButton, pos=start + QPoint(40, 0))
+                QApplication.processEvents()
+                self.assertEqual(header.sectionSize(0), 170)
+                widths = [header.sectionSize(i) for i in range(table.columnCount())]
+                self.window.resize(self.window.width() + 30, self.window.height())
+                self.window._fill_torrents(json.loads(self.TORRENTS_BODY))
+                self.window._fill_directory([{"name": "DEMO", "type": "dir"}])
+                QApplication.processEvents()
+                self.assertEqual([header.sectionSize(i) for i in range(table.columnCount())], widths)
 
     def test_startup_does_not_contact_server_and_keeps_local_table_separate(self):
         window = MainWindow()
@@ -588,10 +776,233 @@ class MainWindowTests(unittest.TestCase):
         self.assertFalse(self.window.busy)
 
     def test_close_when_idle_is_immediate(self):
-        started = time.monotonic()
+        # La escritura real de QSettings en disco puede tardar; aquí se mide
+        # que el cierre no espera a ningún trabajador (sin waitForDone).
+        window = MainWindow(settings=_MemorySettings())
+        window.show()
+        try:
+            started = time.monotonic()
+            window.close()
+            self.assertLess(time.monotonic() - started, 0.25)
+            self.assertFalse(window.isVisible())
+        finally:
+            window.deleteLater()
+            QApplication.processEvents()
+
+    # --- persistencia de anchos de columna ------------------------------
+
+    def stored_widths(self):
+        settings = QSettings(
+            QSettings.Format.IniFormat, QSettings.Scope.UserScope, ORGANIZATION, APPLICATION
+        )
+        settings.setFallbacksEnabled(False)
+        return {
+            name: [
+                int(value) for value in settings.value(f"{COLUMN_WIDTHS_GROUP}/{name}")
+            ]
+            for name in self.CUSTOM_WIDTHS
+        }
+
+    def run_child(self, script, *args):
+        """Ejecuta un proceso hijo real con las mismas preferencias aisladas."""
+        env = os.environ.copy()
+        env["XDG_CONFIG_HOME"] = self.prefs.name
+        env.pop("PYTHONPATH", None)
+        completed = subprocess.run(
+            [sys.executable, "-c", script, *args],
+            cwd=REPO_ROOT,
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        return completed.stdout.strip().splitlines()[-1]
+
+    def test_widths_are_saved_on_close_and_restored_by_new_window(self):
+        apply_widths(self.window, self.CUSTOM_WIDTHS)
         self.window.close()
-        self.assertLess(time.monotonic() - started, 0.25)
         self.assertFalse(self.window.isVisible())
+        self.assertEqual(self.stored_widths(), self.CUSTOM_WIDTHS)
+
+        restored = MainWindow()
+        try:
+            self.assertEqual(header_widths(restored), self.CUSTOM_WIDTHS)
+            self.assertEqual(restored.local_table.rowCount(), 0)
+        finally:
+            restored.close()
+            restored.deleteLater()
+            QApplication.processEvents()
+
+    def test_real_roundtrip_across_processes_restores_all_columns_of_three_tables(self):
+        written = self.run_child_with_widths()
+        self.assertTrue(written["closed"])
+
+        restored = json.loads(self.run_child(_READ_WIDTHS_SCRIPT))
+        self.assertEqual(
+            restored,
+            {name: list(values) for name, values in self.CUSTOM_WIDTHS.items()},
+        )
+
+        # El fichero real en disco solo contiene los anchos de las tres tablas.
+        path = settings_file(self.prefs.name)
+        self.assertTrue(os.path.isfile(path))
+        settings = QSettings(path, QSettings.Format.IniFormat)
+        self.assertEqual(
+            sorted(settings.allKeys()),
+            sorted(f"{COLUMN_WIDTHS_GROUP}/{name}" for name in self.CUSTOM_WIDTHS),
+        )
+        text = read_text(path)
+        for forbidden in (DEFAULT_URL, *DEFAULT_PATHS, "Pelicula A", "Serie B"):
+            self.assertNotIn(forbidden, text)
+
+    def run_child_with_widths(self):
+        return json.loads(
+            self.run_child(_WRITE_WIDTHS_SCRIPT, json.dumps(self.CUSTOM_WIDTHS))
+        )
+
+    def test_corrupt_stored_widths_keep_defaults(self):
+        cases = {
+            "valor no numérico": "torrents=360, ochenta, 100, 300",
+            "lista incompleta": "torrents=360, 180",
+            "ancho negativo": "torrents=-360, 180, 100, 300",
+            "ancho desmesurado": "torrents=999999, 180, 100, 300",
+            "valor escalar": "torrents=360",
+            "valor vacío": "torrents=",
+        }
+        for case, line in cases.items():
+            with self.subTest(case=case):
+                # Fichero propio por caso: evita la caché interna de QSettings
+                # al reescribir el mismo .ini varias veces.
+                root = tempfile.mkdtemp(dir=self.prefs.name)
+                QSettings.setPath(QSettings.Format.IniFormat, QSettings.Scope.UserScope, root)
+                path = settings_file(root)
+                os.makedirs(os.path.dirname(path))
+                with open(path, "w", encoding="utf-8") as handle:
+                    handle.write(
+                        "[column_widths]\n"
+                        "local=301, 121, 281, 101, 102\n"
+                        f"{line}\n"
+                        "directory=540\n"
+                    )
+                window = MainWindow()
+                try:
+                    widths = header_widths(window)
+                    # La tabla válida se restaura aunque las otras estén corruptas.
+                    self.assertEqual(widths["local"], [301, 121, 281, 101, 102])
+                    self.assertEqual(
+                        widths["torrents"], list(DEFAULT_COLUMN_WIDTHS["torrents"])
+                    )
+                    self.assertEqual(
+                        widths["directory"], list(DEFAULT_COLUMN_WIDTHS["directory"])
+                    )
+                finally:
+                    window.close()
+                    window.deleteLater()
+                    QApplication.processEvents()
+
+    def test_close_with_active_query_saves_only_when_window_really_closes(self):
+        self.route("/api/v2/app/version", "v5.3.0", delay=0.5)
+        apply_widths(self.window, self.CUSTOM_WIDTHS)
+        self.window.query_version()
+        self.assertTrue(self.window.busy)
+        self.window.close()
+        # Cierre diferido: la ventana sigue abierta y aún no se ha guardado nada.
+        self.assertTrue(self.window.isVisible())
+        self.assertFalse(os.path.exists(settings_file(self.prefs.name)))
+        self.assertTrue(wait_until(lambda: not self.window.isVisible(), timeout=4.0))
+        self.assertFalse(self.window.busy)
+        self.assertEqual(self.stored_widths(), self.CUSTOM_WIDTHS)
+
+        restored = MainWindow()
+        try:
+            self.assertEqual(header_widths(restored), self.CUSTOM_WIDTHS)
+        finally:
+            restored.close()
+            restored.deleteLater()
+            QApplication.processEvents()
+
+    def test_save_error_on_close_is_visible_and_still_exits(self):
+        # Un directorio ocupando la ruta del .ini provoca AccessError al
+        # escribir, también si las pruebas se ejecutan como root.
+        root = tempfile.mkdtemp(dir=self.prefs.name)
+        QSettings.setPath(QSettings.Format.IniFormat, QSettings.Scope.UserScope, root)
+        os.makedirs(settings_file(root))
+
+        window = MainWindow()
+        window.show()
+        apply_widths(window, self.CUSTOM_WIDTHS)
+        try:
+            with mock.patch("qbt.app.QMessageBox.warning") as warning:
+                window.close()
+            self.assertFalse(window.isVisible())
+            self.assertEqual(warning.call_count, 1)
+            title, message = warning.call_args.args[1:3]
+            self.assertIn("ancho", title.lower())
+            self.assertIn("No se pudieron guardar", message)
+        finally:
+            window.deleteLater()
+            QApplication.processEvents()
+        self.assertFalse(os.path.isfile(settings_file(root)))
+
+    def test_deferred_close_with_save_failure_still_closes(self):
+        # Cierre diferido (consulta en curso) + fallo al guardar: el aviso no
+        # puede dejar la ventana abierta ni _closing colgado para siempre.
+        root = tempfile.mkdtemp(dir=self.prefs.name)
+        QSettings.setPath(QSettings.Format.IniFormat, QSettings.Scope.UserScope, root)
+        os.makedirs(settings_file(root))
+        window = MainWindow()
+        window.show()
+        window.url_edit.setText(self.base_url)
+        apply_widths(window, self.CUSTOM_WIDTHS)
+        self.route("/api/v2/app/version", "v5.3.0", delay=0.4)
+        window.query_version()
+        self.assertTrue(wait_until(lambda: len(self.requests()) >= 1))
+        try:
+            with mock.patch("qbt.app.QMessageBox.warning") as warning:
+                window.close()
+                self.assertTrue(window.isVisible())
+                self.assertTrue(
+                    wait_until(lambda: not window.isVisible(), timeout=4.0)
+                )
+            self.assertFalse(window.busy)
+            self.assertEqual(warning.call_count, 1)
+        finally:
+            window.deleteLater()
+            QApplication.processEvents()
+
+    def test_unexpected_save_failure_still_closes_with_warning(self):
+        window = MainWindow(settings=_BrokenSettings())
+        window.show()
+        apply_widths(window, self.CUSTOM_WIDTHS)
+        try:
+            with mock.patch("qbt.app.QMessageBox.warning") as warning:
+                window.close()
+            self.assertFalse(window.isVisible())
+            self.assertEqual(warning.call_count, 1)
+        finally:
+            window.deleteLater()
+            QApplication.processEvents()
+
+    def test_only_column_widths_are_persisted(self):
+        self.route(self.TORRENTS_PATH, self.TORRENTS_BODY)
+        self.window.path_edits["series"].setText("/mnt/privado/series")
+        self.window.url_edit.setText(self.base_url)
+        self.window.query_torrents()
+        self.assertTrue(wait_until(lambda: not self.window.busy))
+        apply_widths(self.window, self.CUSTOM_WIDTHS)
+        self.window.close()
+
+        path = settings_file(self.prefs.name)
+        text = read_text(path)
+        self.assertEqual(self.stored_widths(), self.CUSTOM_WIDTHS)
+        for forbidden in (DEFAULT_URL, "/mnt/privado/series", "Pelicula A", "Serie B"):
+            self.assertNotIn(forbidden, text)
+        settings = QSettings(path, QSettings.Format.IniFormat)
+        self.assertEqual(
+            sorted(settings.allKeys()),
+            sorted(f"{COLUMN_WIDTHS_GROUP}/{name}" for name in self.CUSTOM_WIDTHS),
+        )
 
 
 if __name__ == "__main__":

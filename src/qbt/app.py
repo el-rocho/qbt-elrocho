@@ -4,7 +4,7 @@ import sys
 import threading
 from urllib.parse import urlsplit
 
-from PySide6.QtCore import QObject, QRunnable, Qt, QThreadPool, Signal, Slot
+from PySide6.QtCore import QObject, QRunnable, QSettings, Qt, QThreadPool, Signal, Slot
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QApplication,
@@ -17,6 +17,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QLineEdit,
     QMainWindow,
+    QMessageBox,
     QPushButton,
     QTableWidget,
     QTableWidgetItem,
@@ -37,6 +38,17 @@ DEFAULT_PATHS = (
 PATH_KEYS = ("peliculas", "series", "libros")
 PATH_LABELS = ("Películas", "Series", "Libros")
 QUERY_TIMEOUT = 6.0  # inactividad por operación de socket, no plazo total
+# Persistencia de anchos de columna: solo geometría de la interfaz local.
+ORGANIZATION = "el-rocho"
+APPLICATION = "qbt-elrocho"
+COLUMN_WIDTHS_GROUP = "column_widths"
+DEFAULT_COLUMN_WIDTHS = {
+    "local": (300, 100, 280, 100, 100),
+    "torrents": (360, 180, 100, 300),
+    "directory": (540, 120, 140),
+}
+MIN_COLUMN_WIDTH = 1
+MAX_COLUMN_WIDTH = 4000
 IDLE_CONNECTION_TEXT = (
     "Sin conexión. Pulse «Consultar versión» o consulte desde una pestaña; "
     "no se guardan credenciales."
@@ -175,9 +187,50 @@ class _QueryTask(QRunnable):
             self._signals.finished.emit(self.request_id)
 
 
+def _create_settings() -> QSettings:
+    """Preferencias propias en INI dentro del perfil del usuario.
+
+    IniFormat/UserScope permite localizar el fichero y aislarlo en pruebas;
+    las claves de sistema no se mezclan (``setFallbacksEnabled(False)``).
+    """
+    settings = QSettings(
+        QSettings.Format.IniFormat, QSettings.Scope.UserScope, ORGANIZATION, APPLICATION
+    )
+    settings.setFallbacksEnabled(False)
+    return settings
+
+
+def _valid_stored_widths(raw, defaults: tuple[int, ...]) -> tuple[int, ...]:
+    """Devuelve anchos guardados solo si son una lista completa y plausible.
+
+    Cualquier valor corrupto (texto, longitud distinta, cero, negativo o
+    desmesurado) descarta el conjunto y conserva los anchos de fábrica.
+    """
+    if not isinstance(raw, (list, tuple)) or len(raw) != len(defaults):
+        return defaults
+    widths = []
+    for value in raw:
+        if isinstance(value, bool):
+            return defaults
+        if isinstance(value, int):
+            width = value
+        elif isinstance(value, str):
+            try:
+                width = int(value.strip())
+            except ValueError:
+                return defaults
+        else:
+            return defaults
+        if not MIN_COLUMN_WIDTH <= width <= MAX_COLUMN_WIDTH:
+            return defaults
+        widths.append(width)
+    return tuple(widths)
+
+
 class MainWindow(QMainWindow):
-    def __init__(self) -> None:
+    def __init__(self, settings: QSettings | None = None) -> None:
         super().__init__()
+        self._settings = settings if settings is not None else _create_settings()
         self.setWindowTitle("Gestor qBittorrent — revisión local y consulta remota")
         self.resize(1000, 780)
         self.busy = False
@@ -205,9 +258,9 @@ class MainWindow(QMainWindow):
             ["Archivo", "Tipo", "Título", "Temporada", "Confianza"]
         )
         self.local_table.horizontalHeader().setStretchLastSection(False)
-        self.local_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
-        for column in range(1, 5):
-            self.local_table.horizontalHeader().setSectionResizeMode(column, QHeaderView.ResizeToContents)
+        self.local_table.horizontalHeader().setSectionResizeMode(QHeaderView.Interactive)
+        for column, width in enumerate(DEFAULT_COLUMN_WIDTHS["local"]):
+            self.local_table.setColumnWidth(column, width)
         self.local_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         local_layout.addWidget(add_button)
         local_layout.addWidget(self.local_table)
@@ -238,8 +291,20 @@ class MainWindow(QMainWindow):
         # Las rutas remotas pueden contener "<" o "&": nunca interpretar HTML.
         self.connection_label.setTextFormat(Qt.TextFormat.PlainText)
         remote_layout.addWidget(self.connection_label)
+        remote_layout.addSpacing(12)
 
         self.remote_tabs = QTabWidget()
+        self.remote_tabs.setObjectName("remoteTabs")
+        tab_font = self.remote_tabs.tabBar().font()
+        tab_font.setPointSizeF(tab_font.pointSizeF() + 1.5)
+        self.remote_tabs.tabBar().setFont(tab_font)
+        self.remote_tabs.setStyleSheet(
+            "QTabWidget#remoteTabs::pane {"
+            " border: 1px solid palette(mid); border-radius: 4px; }"
+            "QTabWidget#remoteTabs > QTabBar {"
+            f" font-size: {tab_font.pointSizeF():g}pt; }}"
+            "QTabWidget#remoteTabs > QTabBar::tab { padding: 8px 16px; }"
+        )
         remote_layout.addWidget(self.remote_tabs, 1)
 
         torrents_page = QWidget()
@@ -257,9 +322,9 @@ class MainWindow(QMainWindow):
         self.torrents_table = QTableWidget(0, 4)
         self.torrents_table.setHorizontalHeaderLabels(["Nombre", "Estado", "Progreso", "Destino"])
         self.torrents_table.horizontalHeader().setStretchLastSection(False)
-        self.torrents_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
-        for column in range(1, 4):
-            self.torrents_table.horizontalHeader().setSectionResizeMode(column, QHeaderView.ResizeToContents)
+        self.torrents_table.horizontalHeader().setSectionResizeMode(QHeaderView.Interactive)
+        for column, width in enumerate(DEFAULT_COLUMN_WIDTHS["torrents"]):
+            self.torrents_table.setColumnWidth(column, width)
         self.torrents_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.torrents_table.setSelectionBehavior(QAbstractItemView.SelectRows)
         torrents_layout.addWidget(self.torrents_table, 1)
@@ -296,9 +361,9 @@ class MainWindow(QMainWindow):
         self.directory_table = QTableWidget(0, 3)
         self.directory_table.setHorizontalHeaderLabels(["Nombre", "Tipo", "Tamaño"])
         self.directory_table.horizontalHeader().setStretchLastSection(False)
-        self.directory_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
-        self.directory_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeToContents)
-        self.directory_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeToContents)
+        self.directory_table.horizontalHeader().setSectionResizeMode(QHeaderView.Interactive)
+        for column, width in enumerate(DEFAULT_COLUMN_WIDTHS["directory"]):
+            self.directory_table.setColumnWidth(column, width)
         self.directory_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.directory_table.setSelectionBehavior(QAbstractItemView.SelectRows)
         directory_layout.addWidget(self.directory_table, 1)
@@ -310,6 +375,56 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage(
             "Solo lectura: no se envía ningún torrent, no se vigila nada y no se guardan credenciales"
         )
+        self._restore_column_widths()
+
+    # --- anchos de columna persistidos ----------------------------------
+
+    def _tables(self) -> dict[str, QTableWidget]:
+        return {
+            "local": self.local_table,
+            "torrents": self.torrents_table,
+            "directory": self.directory_table,
+        }
+
+    def _restore_column_widths(self) -> None:
+        """Aplica los anchos guardados; si faltan o no son válidos, los de fábrica."""
+        for name, table in self._tables().items():
+            defaults = DEFAULT_COLUMN_WIDTHS[name]
+            stored = _valid_stored_widths(
+                self._settings.value(f"{COLUMN_WIDTHS_GROUP}/{name}"), defaults
+            )
+            for column, width in enumerate(stored):
+                table.setColumnWidth(column, width)
+
+    def _save_column_widths(self) -> bool:
+        """Guarda los anchos de las tres tablas y hace visible cualquier fallo.
+
+        No silencia errores: si el fichero no se puede escribir, avisa con un
+        diálogo modal y aun así permite cerrar la ventana.
+        """
+        failed = False
+        try:
+            for name, table in self._tables().items():
+                header = table.horizontalHeader()
+                self._settings.setValue(
+                    f"{COLUMN_WIDTHS_GROUP}/{name}",
+                    [header.sectionSize(column) for column in range(table.columnCount())],
+                )
+            # sync() es quien escribe de verdad; el estado se consulta después.
+            self._settings.sync()
+            failed = self._settings.status() != QSettings.Status.NoError
+        except Exception:
+            # Nunca dejar el cierre a medias por un fallo inesperado del backend.
+            failed = True
+        if failed:
+            QMessageBox.warning(
+                self,
+                "Anchos de columna no guardados",
+                "No se pudieron guardar los anchos de las columnas. La revisión "
+                "local y las consultas no se ven afectadas; la ventana se cerrará "
+                "igualmente.",
+            )
+        return not failed
 
     # --- revisión local -------------------------------------------------
 
@@ -560,6 +675,9 @@ class MainWindow(QMainWindow):
             event.ignore()
             return
         self._pool.clear()
+        # Solo en el cierre efectivo (sin trabajos pendientes), también cuando
+        # se llega aquí desde el cierre diferido de _on_finished.
+        self._save_column_widths()
         event.accept()
         super().closeEvent(event)
 
