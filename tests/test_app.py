@@ -271,6 +271,16 @@ class MainWindowTests(unittest.TestCase):
         "directory": [311, 99, 123],
     }
 
+    def test_active_tab_has_theme_aware_highlight(self):
+        style = self.window.remote_tabs.styleSheet()
+        self.assertIn("QTabBar::tab:selected", style)
+        self.assertIn("background: palette(highlight)", style)
+        self.assertIn("color: palette(highlighted-text)", style)
+        self.assertIn("font-weight: bold", style)
+        self.window.remote_tabs.setCurrentIndex(1)
+        QApplication.processEvents()
+        self.assertEqual(self.window.remote_tabs.currentIndex(), 1)
+
     def test_remote_tabs_have_visual_separation_without_restyling_local_area(self):
         QApplication.processEvents()
         tabs = self.window.remote_tabs

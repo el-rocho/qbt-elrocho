@@ -304,6 +304,9 @@ class MainWindow(QMainWindow):
             "QTabWidget#remoteTabs > QTabBar {"
             f" font-size: {tab_font.pointSizeF():g}pt; }}"
             "QTabWidget#remoteTabs > QTabBar::tab { padding: 8px 16px; }"
+            "QTabWidget#remoteTabs > QTabBar::tab:selected {"
+            " background: palette(highlight); color: palette(highlighted-text);"
+            " font-weight: bold; }"
         )
         remote_layout.addWidget(self.remote_tabs, 1)
 
