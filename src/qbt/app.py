@@ -9,7 +9,6 @@ from PySide6.QtWidgets import (
     QAbstractItemView,
     QApplication,
     QComboBox,
-    QFileDialog,
     QGridLayout,
     QGroupBox,
     QHBoxLayout,
@@ -26,7 +25,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from .classification import classify
+from .local_review import LocalReviewPanel
 from .qbittorrent import QBittorrentClient, QBittorrentError
 
 DEFAULT_URL = "http://10.0.4.56:8080"
@@ -43,7 +42,7 @@ ORGANIZATION = "el-rocho"
 APPLICATION = "qbt-elrocho"
 COLUMN_WIDTHS_GROUP = "column_widths"
 DEFAULT_COLUMN_WIDTHS = {
-    "local": (300, 100, 280, 100, 100),
+    "local": (300, 110, 260, 90, 100, 280, 70, 300),
     "torrents": (360, 180, 100, 300),
     "directory": (540, 120, 140),
 }
@@ -228,7 +227,7 @@ def _valid_stored_widths(raw, defaults: tuple[int, ...]) -> tuple[int, ...]:
 
 
 class MainWindow(QMainWindow):
-    def __init__(self, settings: QSettings | None = None) -> None:
+    def __init__(self, settings: QSettings | None = None, catalog_path=None) -> None:
         super().__init__()
         self._settings = settings if settings is not None else _create_settings()
         self.setWindowTitle("Gestor qBittorrent — revisión local y consulta remota")
@@ -248,22 +247,14 @@ class MainWindow(QMainWindow):
         central = QWidget()
         root = QVBoxLayout(central)
 
-        local_group = QGroupBox("Revisión local (sin conexión)")
+        local_group = LocalReviewPanel(self._settings, self._local_roots, catalog_path)
         self.local_group = local_group
-        local_layout = QVBoxLayout(local_group)
-        add_button = QPushButton("Añadir archivos .torrent…")
-        add_button.clicked.connect(self.add_files)
-        self.local_table = QTableWidget(0, 5)
-        self.local_table.setHorizontalHeaderLabels(
-            ["Archivo", "Tipo", "Título", "Temporada", "Confianza"]
-        )
+        self.local_status_label = local_group.status_label
+        self.local_table = local_group.table
         self.local_table.horizontalHeader().setStretchLastSection(False)
         self.local_table.horizontalHeader().setSectionResizeMode(QHeaderView.Interactive)
         for column, width in enumerate(DEFAULT_COLUMN_WIDTHS["local"]):
             self.local_table.setColumnWidth(column, width)
-        self.local_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
-        local_layout.addWidget(add_button)
-        local_layout.addWidget(self.local_table)
         root.addWidget(local_group)
 
         remote_group = QGroupBox("qBittorrent — consulta de solo lectura")
@@ -393,9 +384,11 @@ class MainWindow(QMainWindow):
         """Aplica los anchos guardados; si faltan o no son válidos, los de fábrica."""
         for name, table in self._tables().items():
             defaults = DEFAULT_COLUMN_WIDTHS[name]
-            stored = _valid_stored_widths(
-                self._settings.value(f"{COLUMN_WIDTHS_GROUP}/{name}"), defaults
-            )
+            raw = self._settings.value(f"{COLUMN_WIDTHS_GROUP}/{name}")
+            if name == "local" and isinstance(raw, (list, tuple)) and len(raw) == 5:
+                # Conserva los anchos de la versión anterior y añade solo los nuevos.
+                raw = list(_valid_stored_widths(raw, defaults[:5])) + list(defaults[5:])
+            stored = _valid_stored_widths(raw, defaults)
             for column, width in enumerate(stored):
                 table.setColumnWidth(column, width)
 
@@ -431,23 +424,16 @@ class MainWindow(QMainWindow):
 
     # --- revisión local -------------------------------------------------
 
+    def _local_roots(self) -> dict[str, str]:
+        edits = getattr(self, "path_edits", {})
+        return {key: edits[key].text().strip() if key in edits else default
+                for key, default in zip(PATH_KEYS, DEFAULT_PATHS)}
+
     def add_files(self) -> None:
-        files, _ = QFileDialog.getOpenFileNames(
-            self, "Seleccionar torrents", "", "Archivos torrent (*.torrent)"
-        )
-        for filename in files:
-            proposal = classify(filename)
-            row = self.local_table.rowCount()
-            self.local_table.insertRow(row)
-            values = [
-                proposal.source.name,
-                proposal.kind,
-                proposal.title,
-                f"{proposal.season:02d}" if proposal.season is not None else "—",
-                proposal.confidence,
-            ]
-            for column, value in enumerate(values):
-                self.local_table.setItem(row, column, QTableWidgetItem(value))
+        self.local_group.choose_files()
+
+    def import_files(self, files: list[str]) -> None:
+        self.local_group.import_files(files)
 
     # --- consultas remotas ---------------------------------------------
 
@@ -493,6 +479,7 @@ class MainWindow(QMainWindow):
         if self._closing:
             return
         had_rows = bool(self.torrents_table.rowCount() or self.directory_table.rowCount())
+        self.local_group.set_remote_torrents(None)
         self.torrents_table.setRowCount(0)
         self.directory_table.setRowCount(0)
         # Las etiquetas de cada pestaña no deben seguir afirmando datos del
@@ -633,6 +620,7 @@ class MainWindow(QMainWindow):
             )
 
     def _fill_torrents(self, torrents: list[dict]) -> None:
+        self.local_group.set_remote_torrents(torrents)
         self.torrents_table.setRowCount(0)
         for torrent in torrents:
             row = self.torrents_table.rowCount()
@@ -662,6 +650,10 @@ class MainWindow(QMainWindow):
                 self.directory_table.setItem(row, column, QTableWidgetItem(str(value)))
 
     def closeEvent(self, event) -> None:
+        # Ceder foco consolida la celda/combobox activa antes del cierre del catálogo.
+        if not self._closing and not self.local_group.commit_edits():
+            event.ignore()  # No ocultar un fallo de guardado al cerrar el editor activo.
+            return
         self._closing = True
         if self._tasks:
             # Sin waitForDone: se ignora el cierre, se cancela (marca
@@ -681,6 +673,7 @@ class MainWindow(QMainWindow):
         # Solo en el cierre efectivo (sin trabajos pendientes), también cuando
         # se llega aquí desde el cierre diferido de _on_finished.
         self._save_column_widths()
+        self.local_group.close_catalog()
         event.accept()
         super().closeEvent(event)
 

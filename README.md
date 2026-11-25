@@ -6,8 +6,9 @@ qBittorrent, con revisión y aprobación previas.
 
 **Estado: prototipo en desarrollo.** La interfaz mantiene la revisión local de
 `.torrent` y añade consultas de solo lectura a la Web API: versión, lista de
-torrents y contenido del nivel inmediato de un directorio. No hay vigilancia,
-persistencia, envío ni escritura remota.
+torrents y contenido del nivel inmediato de un directorio. Conserva en SQLite
+la revisión local, sus correcciones y destinos elegidos. No hay vigilancia,
+envío ni escritura remota; las consultas del servidor siguen siendo temporales.
 
 No se envía ningún torrent en esta etapa. Antes de habilitar conexiones de
 escritura se mantendrá la revisión y aprobación explícita por lote.
@@ -18,10 +19,13 @@ el archivo de configuración del servidor tenía el atributo inmutable, que
 impedía guardar los cambios. Tras retirarlo, aplicar la restricción y detener
 y arrancar limpiamente el servicio, el archivo conserva `/32` y proxmox1
 recibe HTTP 403 sin autenticación. No se modificó el cortafuegos ni el código
-de la aplicación. Queda pendiente repetir «Consultar versión» desde Windows
-para confirmar el acceso permitido después de esta intervención. El detalle
-operativo y las copias de configuración permanecen en la documentación privada
-del Vault y en el servidor, no en este repositorio.
+de la aplicación durante esa intervención. La prueba posterior desde Windows
+fue confirmada sin pedir autenticación. Por decisión del administrador se volvió
+a activar el atributo inmutable sobre la configuración corregida: para futuros
+cambios de preferencias habrá que desbloquearlo temporalmente y verificar el
+guardado antes de volver a protegerlo. El detalle operativo y las copias de
+configuración permanecen en la documentación privada del Vault y en el servidor,
+no en este repositorio.
 
 ## Interfaz
 
@@ -30,9 +34,11 @@ abajo la **consulta remota**, que se organiza en dos pestañas. El panel remoto
 tiene un marco propio, títulos de pestaña ampliados y mayor separación respecto
 a la cabecera de conexión; Revisión local conserva su estilo.
 
-- **Revisión local (superior):** selección de `.torrent` y clasificación
-  heurística en una tabla independiente de las pestañas. No abre conexiones ni
-  envía archivos.
+- **Revisión local (superior):** selección y lectura de `.torrent`, clasificación
+  heurística y catálogo SQLite. Permite corregir tipo, título y temporada,
+  elegir un destino y marcar Incluir. Los archivos originales no se modifican,
+  no se abren conexiones desde este panel y marcar una fila **no envía ni
+  aprueba un lote**. Las tablas remotas continúan sin permitir edición.
 - **Cabecera común de qBittorrent:** URL editable solo cuando no hay trabajo
   (por defecto `http://10.0.4.56:8080`), botón «Consultar versión» y botón
   «Cancelar consulta». Los mensajes de «Consultar versión» aparecen en la
@@ -74,21 +80,83 @@ para restaurarlos la próxima vez que se abra. Si el fichero de preferencias
 estuviera corrupto se usan los anchos de fábrica, y si no se puede escribir al
 cerrar se avisa con un diálogo sin impedir la salida.
 
-Solo se persisten esos anchos, por tabla: la URL, las rutas, las credenciales y
-los torrents mostrados no se guardan. El fichero es
-`~/.config/el-rocho/qbt-elrocho.ini` (formato INI, ámbito de usuario). Los datos
-siguen siendo de solo lectura.
+En las preferencias INI solo se persisten los anchos, por tabla. En Linux el
+fichero es `~/.config/el-rocho/qbt-elrocho.ini`; en Windows, la ubicación INI de
+QSettings para el usuario. Se conservan los cinco anchos locales de la versión
+anterior y se añaden los de las tres columnas nuevas. La URL, las credenciales
+y las consultas remotas no se guardan en las preferencias. El catálogo local
+SQLite es independiente y sí conserva los destinos de las filas revisadas.
+
+### Catálogo, destinos y duplicados
+
+- **Guardado local:** cada alta o corrección válida se guarda inmediatamente.
+  Al abrir se recuperan las revisiones, no las consultas remotas. La base
+  `qbt-elrocho.sqlite3` está junto al INI; su ruta aparece en la ayuda emergente
+  del mensaje del panel local. No contiene el archivo torrent ni sus trackers,
+  claves o credenciales; sí rutas de origen, identidades y metadatos revisados.
+- **Correcciones:** Tipo es un selector; Título y Temporada se editan con doble
+  clic o F2. La clasificación parte del nombre del archivo y es conservadora:
+  no decide que un nombre desconocido sea una película. Los cambios manuales
+  quedan identificados como tales.
+- **Destinos por usuario:** las raíces iniciales son las editables en
+  «Archivos descargados». Cada fila permite seleccionar o escribir su destino
+  absoluto; también ofrece los destinos ya guardados del mismo tipo. Las
+  raíces del formulario no se persisten por separado ni alteran las decisiones
+  previas. Películas y libros proponen su raíz, sin crear carpetas por título
+  o autor. Cuando una serie tiene varias alternativas conocidas, no se elige
+  una automáticamente. La aplicación no añade subcarpetas de serie/temporada:
+  la estructura del torrent y la configuración del servidor siguen mandando.
+- **Identidad exacta:** calcula el infohash sobre los bytes originales del
+  diccionario `info`: SHA1 en v1, SHA256 en v2 y ambas identidades en híbridos.
+  Archivos con distinto nombre pero la misma identidad son duplicados. La
+  segunda revisión se desmarca por defecto, sin borrar nada. También se detecta
+  la identidad de registros cuyo archivo original está ausente o en error:
+  una copia válida puede quedar desmarcada por coincidir con uno de ellos.
+  No hay sustitución ni limpieza automática del catálogo; se puede revisar
+  manualmente Incluir en la copia válida.
+- **Servidor:** tras pulsar «Consultar torrents» se compara con esa última
+  respuesta; una coincidencia exacta desmarca la fila, **aunque se hubiese
+  marcado manualmente antes de consultar**. Cada nueva consulta vuelve a aplicar
+  esa exclusión; se puede volver a revisar la casilla después. La respuesta no se
+  almacena en SQLite, aunque la selección local resultante sí queda guardada.
+  Cambiar URL descarta esa comparación y no vuelve a marcar filas por sí solo.
+  Sin consultar no se afirma que el torrent falte en el servidor. Para v2 se
+  necesita el identificador completo; un hash remoto truncado no se trata
+  como prueba de coincidencia.
+- **Títulos parecidos:** son solo avisos de posible contenido relacionado,
+  nunca una prueba ni motivo para excluir automáticamente. No se comparan los
+  bytes del contenido descargado, ni se recorre la biblioteca. La consulta de
+  directorio continúa siendo una vista independiente del nivel inmediato.
+- **Errores:** archivos inválidos, ausentes o sustituidos quedan señalados y
+  excluidos. Se vuelven a comprobar los originales al abrir; reañadir la misma
+  identidad conserva correcciones; si no se puede leer, conserva igualmente
+  las correcciones y la última identidad conocida, pero se excluye y muestra
+  el error. Una identidad distinta y válida exige revisar una nueva propuesta.
+  Una base incompatible no se sobrescribe. Si no se puede
+  guardar, se muestra el fallo y se conserva el último valor guardado; el cierre
+  tampoco oculta un rechazo de validación al consolidar el editor activo.
+- **Límites locales:** archivo torrent de hasta 8 MiB, profundidad bencode 32
+  y 100 000 valores. Se comprueba estructura, no la integridad criptográfica
+  completa de las piezas. La lectura local, SQLite y la comparación se ejecutan
+  en el hilo de interfaz: grandes catálogos o archivos en unidades lentas
+  pueden introducir pausas. El trabajo de red sigue en segundo plano.
+- **Conservación:** la base mantiene el último estado por ruta de origen hasta
+  que el usuario gestione su copia local; aún no hay borrado desde la interfaz,
+  caducidad, auditoría de cada cambio ni historial de envíos.
 
 ### Capturas
 
 Las imágenes de `docs/capturas/` se generaron con datos **DEMO** (ficticios) y
-sin red: `qbt_ui_pestana_torrents.png` y `qbt_ui_pestana_archivos.png`. No son
-lecturas de un servidor real.
+sin red. `qbt_ui_pestana_torrents.png` y `qbt_ui_pestana_archivos.png`
+corresponden a la fase anterior; `qbt_ui_catalogo_local.png` y
+`qbt_ui_catalogo_directorio.png` muestran la revisión local con destinos y
+avisos. No son lecturas de un servidor real.
 
 ## Límites y seguridad
 
-La fase es exclusivamente de lectura: no hay `POST`, envío de torrents,
-vigilancia de carpetas, SQLite ni almacenamiento de secretos.
+El acceso al servidor es exclusivamente de lectura: no hay `POST`, envío de
+torrents, cambios de preferencias ni vigilancia de carpetas. SQLite solo
+almacena la revisión local, sin credenciales ni respuestas remotas.
 
 - Tiempo de espera de cada operación de socket: **6 s de inactividad**, no un
   plazo total. Es el `timeout` de `urllib`: si la conexión avanza lentamente
@@ -127,7 +195,7 @@ vigilancia de carpetas, SQLite ni almacenamiento de secretos.
 
 - Python ≥ 3.11.
 - Interfaz de escritorio con PySide6.
-- Catálogo local en SQLite (no implementado).
+- Catálogo local en SQLite (biblioteca estándar).
 - Comunicación con qBittorrent mediante su API Web (solo lectura en esta fase).
 
 ## Estructura

@@ -266,10 +266,32 @@ class MainWindowTests(unittest.TestCase):
 
     # Anchos distintos de los de fábrica para cada columna de cada tabla.
     CUSTOM_WIDTHS = {
-        "local": [171, 92, 233, 61, 118],
+        "local": [171, 92, 233, 61, 118, 241, 72, 221],
         "torrents": [251, 133, 87, 209],
         "directory": [311, 99, 123],
     }
+
+    def test_local_review_exposes_destination_inclusion_and_warnings(self):
+        headers = [self.window.local_table.horizontalHeaderItem(i).text()
+                   for i in range(self.window.local_table.columnCount())]
+        self.assertEqual(headers, ["Archivo", "Tipo", "Título", "Temporada", "Confianza",
+                                   "Destino", "Incluir", "Avisos"])
+        self.assertNotEqual(self.window.local_table.editTriggers(), QAbstractItemView.NoEditTriggers)
+        self.assertEqual(self.window.torrents_table.editTriggers(), QAbstractItemView.NoEditTriggers)
+        self.assertEqual(self.window.directory_table.editTriggers(), QAbstractItemView.NoEditTriggers)
+
+    def test_previous_five_local_column_widths_are_preserved_when_adding_review_columns(self):
+        settings = _MemorySettings()
+        legacy = [301, 121, 281, 101, 102]
+        settings.setValue(f"{COLUMN_WIDTHS_GROUP}/local", legacy)
+        window = MainWindow(settings=settings)
+        try:
+            self.assertEqual(len(DEFAULT_COLUMN_WIDTHS["local"]), 8)
+            self.assertEqual(header_widths(window)["local"],
+                             legacy + list(DEFAULT_COLUMN_WIDTHS["local"][5:]))
+        finally:
+            window.close()
+            window.deleteLater()
 
     def test_active_tab_has_theme_aware_highlight(self):
         style = self.window.remote_tabs.styleSheet()
@@ -327,7 +349,7 @@ class MainWindowTests(unittest.TestCase):
                 tuple(window.path_edits[key].text() for key in ("peliculas", "series", "libros")),
                 DEFAULT_PATHS,
             )
-            self.assertEqual(window.local_table.columnCount(), 5)
+            self.assertEqual(window.local_table.columnCount(), 8)
             self.assertEqual(window.local_table.rowCount(), 0)
             self.assertEqual(window.torrents_table.rowCount(), 0)
         finally:
@@ -891,7 +913,7 @@ class MainWindowTests(unittest.TestCase):
                 with open(path, "w", encoding="utf-8") as handle:
                     handle.write(
                         "[column_widths]\n"
-                        "local=301, 121, 281, 101, 102\n"
+                        "local=301, 121, 281, 101, 102, 241, 72, 221\n"
                         f"{line}\n"
                         "directory=540\n"
                     )
@@ -899,7 +921,7 @@ class MainWindowTests(unittest.TestCase):
                 try:
                     widths = header_widths(window)
                     # La tabla válida se restaura aunque las otras estén corruptas.
-                    self.assertEqual(widths["local"], [301, 121, 281, 101, 102])
+                    self.assertEqual(widths["local"], [301, 121, 281, 101, 102, 241, 72, 221])
                     self.assertEqual(
                         widths["torrents"], list(DEFAULT_COLUMN_WIDTHS["torrents"])
                     )
