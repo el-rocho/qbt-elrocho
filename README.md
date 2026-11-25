@@ -12,12 +12,16 @@ persistencia, envío ni escritura remota.
 No se envía ningún torrent en esta etapa. Antes de habilitar conexiones de
 escritura se mantendrá la revisión y aprobación explícita por lote.
 
-Desde Windows `10.0.4.20` se comprobó la WebUI y la API (`v5.3.0`). Tras limitar
-el bypass anónimo a `10.0.4.20/32`, Windows leyó ese valor activo y el nodo
-proxmox1 recibió HTTP 403. Los archivos de configuración de la VM aún muestran
-`/24`, por lo que la persistencia tras reiniciar no está confirmada. No se
-modificó el cortafuegos; el detalle está en la documentación del Vault. La
-prueba de la interfaz contra el servidor real queda pendiente.
+Desde Windows `10.0.4.20` se comprobó la WebUI y la API (`v5.3.0`). El
+25-11-2026 se corrigió la persistencia del bypass anónimo `10.0.4.20/32`:
+el archivo de configuración del servidor tenía el atributo inmutable, que
+impedía guardar los cambios. Tras retirarlo, aplicar la restricción y detener
+y arrancar limpiamente el servicio, el archivo conserva `/32` y proxmox1
+recibe HTTP 403 sin autenticación. No se modificó el cortafuegos ni el código
+de la aplicación. Queda pendiente repetir «Consultar versión» desde Windows
+para confirmar el acceso permitido después de esta intervención. El detalle
+operativo y las copias de configuración permanecen en la documentación privada
+del Vault y en el servidor, no en este repositorio.
 
 ## Interfaz
 
