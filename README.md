@@ -36,7 +36,10 @@ a la cabecera de conexión; Revisión local conserva su estilo.
 
 - **Revisión local (superior):** selección y lectura de `.torrent`, clasificación
   heurística y catálogo SQLite. Permite corregir tipo, título y temporada,
-  elegir un destino y marcar Incluir. Los archivos originales no se modifican,
+  elegir un destino y marcar Incluir. Botones «Quitar selección» y «Limpiar
+  todo» eliminan revisiones del catálogo local **sin borrar los archivos
+  .torrent del disco**; «Limpiar todo» pide confirmación. Los archivos
+  originales no se modifican,
   no se abren conexiones desde este panel y marcar una fila **no envía ni
   aprueba un lote**. Las tablas remotas continúan sin permitir edición.
 - **Cabecera común de qBittorrent:** URL editable cuando no hay trabajo y no se
@@ -159,8 +162,9 @@ los destinos de las filas revisadas.
   en el hilo de interfaz: grandes catálogos o archivos en unidades lentas
   pueden introducir pausas. El trabajo de red sigue en segundo plano.
 - **Conservación:** la base mantiene el último estado por ruta de origen hasta
-  que el usuario gestione su copia local; aún no hay borrado desde la interfaz,
-  caducidad, auditoría de cada cambio ni historial de envíos.
+  que el usuario la quite con «Quitar selección» o la vacíe con «Limpiar todo»
+  (ambas solo afectan al catálogo, no al archivo `.torrent`). Queda pendiente
+  caducidad automática, auditoría de cada cambio e historial de envíos.
 
 ### Capturas
 

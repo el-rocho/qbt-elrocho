@@ -81,6 +81,32 @@ class CatalogMemoryTests(unittest.TestCase):
 
         self.assertEqual(len(catalog.list_records()), 2)
 
+    def test_delete_removes_only_the_requested_source(self):
+        catalog = Catalog(":memory:")
+        self.addCleanup(catalog.close)
+        catalog.save(record("a.torrent"))
+        catalog.save(record("b.torrent", info_hash_v1="c" * 40))
+
+        self.assertTrue(catalog.delete("a.torrent"))
+        self.assertEqual([item.source for item in catalog.list_records()], ["b.torrent"])
+
+    def test_delete_missing_source_returns_false(self):
+        catalog = Catalog(":memory:")
+        self.addCleanup(catalog.close)
+        catalog.save(record("a.torrent"))
+
+        self.assertFalse(catalog.delete("inexistente.torrent"))
+        self.assertEqual(len(catalog.list_records()), 1)
+
+    def test_clear_removes_all_records_and_returns_count(self):
+        catalog = Catalog(":memory:")
+        self.addCleanup(catalog.close)
+        catalog.save(record("a.torrent"))
+        catalog.save(record("b.torrent", info_hash_v1="c" * 40))
+
+        self.assertEqual(catalog.clear(), 2)
+        self.assertEqual(catalog.list_records(), [])
+
 
 class CatalogFileTests(CatalogTempDir):
     def test_creates_missing_parent_directory_and_persists(self):
@@ -93,6 +119,18 @@ class CatalogFileTests(CatalogTempDir):
         reopened = Catalog(path)
         self.addCleanup(reopened.close)
         self.assertEqual([item.source for item in reopened.list_records()], ["a.torrent"])
+
+    def test_delete_persists_across_reopen(self):
+        path = self.dir / "catalogo.sqlite3"
+        catalog = Catalog(path)
+        catalog.save(record("a.torrent"))
+        catalog.save(record("b.torrent", info_hash_v1="c" * 40))
+        catalog.delete("a.torrent")
+        catalog.close()
+
+        reopened = Catalog(path)
+        self.addCleanup(reopened.close)
+        self.assertEqual([item.source for item in reopened.list_records()], ["b.torrent"])
 
     def test_schema_version_and_columns_are_exact(self):
         path = self.dir / "catalogo.sqlite3"

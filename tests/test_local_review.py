@@ -7,7 +7,7 @@ from pathlib import Path
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtCore import QSettings, Qt
-from PySide6.QtWidgets import QApplication, QAbstractItemView, QLineEdit
+from PySide6.QtWidgets import QApplication, QAbstractItemView, QLineEdit, QMessageBox
 from PySide6.QtTest import QTest
 
 from qbt.app import MainWindow
@@ -301,7 +301,7 @@ class LocalReviewTests(unittest.TestCase):
         window._fill_torrents([])
         self.assertIn("No se guardó", window.local_status_label.text())
 
-    def test_long_warnings_expand_row_height_and_keep_full_tooltip(self):
+    def test_long_warnings_keep_compact_row_and_full_tooltip(self):
         first = self.root / "DEMO.Serie.S02E01.torrent"
         copy = self.root / "copia.torrent"
         copy.write_bytes(make_torrent(first))
@@ -310,8 +310,72 @@ class LocalReviewTests(unittest.TestCase):
         window.local_table.setColumnWidth(7, 150)
         window._fill_torrents([{"name": "DEMO", "hash": read_torrent(first).info_hash_v1}])
         table = window.local_table
-        self.assertGreater(table.rowHeight(1), table.verticalHeader().defaultSectionSize())
+        # El texto largo no debe inflar la fila: se recorta y el detalle completo
+        # sigue disponible en el tooltip.
+        self.assertLessEqual(table.rowHeight(1), table.verticalHeader().defaultSectionSize())
         self.assertEqual(table.item(1, 7).toolTip(), table.item(1, 7).text())
+
+    def test_remove_selected_deletes_rows_without_deleting_torrent_files(self):
+        source = self.root / "DEMO.Serie.S02E01.torrent"
+        other = self.root / "DEMO.Otra.S01E01.torrent"
+        make_torrent(source)
+        make_torrent(other, byte=b"b")
+        window = self.window()
+        window.import_files([str(source), str(other)])
+        self.assertEqual(window.local_table.rowCount(), 2)
+
+        window.local_table.selectRow(0)
+        window.local_group.remove_selected()
+
+        self.assertEqual(window.local_table.rowCount(), 1)
+        self.assertEqual(window.local_table.item(0, 0).text(), Path(other).name)
+        self.assertTrue(source.exists())
+        self.assertTrue(other.exists())
+
+    def test_removed_records_do_not_reappear_on_reopen(self):
+        source = self.root / "DEMO.Serie.S02E01.torrent"
+        make_torrent(source)
+        window = self.window()
+        window.import_files([str(source)])
+        window.local_table.selectRow(0)
+        window.local_group.remove_selected()
+        window.close()
+        window.deleteLater()
+        QApplication.processEvents()
+
+        reopened = self.window()
+        self.assertEqual(reopened.local_table.rowCount(), 0)
+
+    def test_clear_all_removes_everything_after_confirmation(self):
+        source = self.root / "DEMO.Serie.S02E01.torrent"
+        other = self.root / "DEMO.Otra.S01E01.torrent"
+        make_torrent(source)
+        make_torrent(other, byte=b"b")
+        window = self.window()
+        window.import_files([str(source), str(other)])
+        with mock.patch(
+            "qbt.local_review.QMessageBox.question",
+            return_value=QMessageBox.StandardButton.Yes,
+        ):
+            window.local_group.clear_all()
+
+        self.assertEqual(window.local_table.rowCount(), 0)
+        self.assertIn("0 revisión", window.local_status_label.text())
+        self.assertTrue(source.exists())
+        self.assertTrue(other.exists())
+
+    def test_clear_all_cancelled_keeps_records(self):
+        source = self.root / "DEMO.Serie.S02E01.torrent"
+        make_torrent(source)
+        window = self.window()
+        window.import_files([str(source)])
+        with mock.patch(
+            "qbt.local_review.QMessageBox.question",
+            return_value=QMessageBox.StandardButton.No,
+        ):
+            window.local_group.clear_all()
+
+        self.assertEqual(window.local_table.rowCount(), 1)
 
     def _open_cell_editor(self, window, column):
         table = window.local_table

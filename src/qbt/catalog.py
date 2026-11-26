@@ -214,5 +214,27 @@ class Catalog:
         except sqlite3.Error as exc:
             raise CatalogError(f"No se pudo guardar {record.source}: {exc}") from None
 
+    def delete(self, source: str) -> bool:
+        """Elimina un registro por su ruta de origen; devuelve si había uno."""
+        self._ensure_open()
+        try:
+            with self._conn:
+                cursor = self._conn.execute(
+                    "DELETE FROM records WHERE source = ?", (source,)
+                )
+        except sqlite3.Error as exc:
+            raise CatalogError(f"No se pudo eliminar {source}: {exc}") from None
+        return cursor.rowcount > 0
+
+    def clear(self) -> int:
+        """Elimina todos los registros y devuelve cuántos había."""
+        self._ensure_open()
+        try:
+            with self._conn:
+                cursor = self._conn.execute("DELETE FROM records")
+        except sqlite3.Error as exc:
+            raise CatalogError(f"No se pudo limpiar el catálogo: {exc}") from None
+        return cursor.rowcount
+
     def close(self) -> None:
         self._discard()

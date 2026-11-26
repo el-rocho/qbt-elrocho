@@ -5,8 +5,8 @@ from pathlib import Path, PureWindowsPath
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
-    QAbstractItemView, QApplication, QComboBox, QFileDialog, QGroupBox, QLabel,
-    QPushButton, QTableWidget, QTableWidgetItem, QVBoxLayout,
+    QAbstractItemView, QApplication, QComboBox, QFileDialog, QGroupBox, QHBoxLayout,
+    QLabel, QMessageBox, QPushButton, QTableWidget, QTableWidgetItem, QVBoxLayout,
 )
 
 from .catalog import Catalog, CatalogError, LocalRecord
@@ -37,7 +37,15 @@ class LocalReviewPanel(QGroupBox):
         layout = QVBoxLayout(self)
         self.add_button = QPushButton("Añadir archivos .torrent…")
         self.add_button.clicked.connect(self.choose_files)
-        layout.addWidget(self.add_button)
+        self.remove_button = QPushButton("Quitar selección")
+        self.remove_button.clicked.connect(self.remove_selected)
+        self.clear_button = QPushButton("Limpiar todo")
+        self.clear_button.clicked.connect(self.clear_all)
+        button_row = QHBoxLayout()
+        for button in (self.add_button, self.remove_button, self.clear_button):
+            button_row.addWidget(button)
+        button_row.addStretch(1)
+        layout.addLayout(button_row)
         self.status_label = QLabel()
         self.status_label.setWordWrap(True)
         self.status_label.setTextFormat(Qt.TextFormat.PlainText)
@@ -46,7 +54,13 @@ class LocalReviewPanel(QGroupBox):
         self.table.setHorizontalHeaderLabels(
             ["Archivo", "Tipo", "Título", "Temporada", "Confianza", "Destino", "Incluir", "Avisos"]
         )
+        # Filas compactas: el texto de «Avisos» no debe inflar la altura; el
+        # detalle completo sigue disponible en el tooltip.
+        self.table.setWordWrap(False)
+        self.table.setTextElideMode(Qt.TextElideMode.ElideRight)
         self.table.setEditTriggers(QAbstractItemView.DoubleClicked | QAbstractItemView.EditKeyPressed)
+        self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.table.setSelectionMode(QAbstractItemView.ExtendedSelection)
         self.table.itemChanged.connect(self._item_changed)
         layout.addWidget(self.table)
         if catalog_path is None:
@@ -311,6 +325,57 @@ class LocalReviewPanel(QGroupBox):
             self.add_button.setFocus(Qt.OtherFocusReason)
             return self._last_save_error is None
         return True
+
+    def _selected_sources(self) -> list[str]:
+        rows = sorted({index.row() for index in self.table.selectedIndexes()}, reverse=True)
+        return [
+            self._records[row].source for row in rows if 0 <= row < len(self._records)
+        ]
+
+    def remove_selected(self) -> None:
+        """Quita de la revisión local las filas seleccionadas; no toca el disco."""
+        if self._catalog is None or not self.commit_edits():
+            return
+        sources = self._selected_sources()
+        if not sources:
+            return
+        try:
+            for source in sources:
+                self._catalog.delete(source)
+        except CatalogError as exc:
+            self._error(f"No se quitó la selección; el catálogo queda intacto. {exc}")
+            return
+        removed = set(sources)
+        self._records = [record for record in self._records if record.source not in removed]
+        self._last_save_error = None
+        self._summary()
+        self._render()
+
+    def clear_all(self) -> None:
+        """Vacía la revisión local tras confirmar; no borra los archivos .torrent."""
+        if self._catalog is None or not self.commit_edits():
+            return
+        if not self._records:
+            return
+        answer = QMessageBox.question(
+            self,
+            "Limpiar el catálogo",
+            "Se quitarán todas las revisiones guardadas localmente. "
+            "Los archivos .torrent del disco no se borran.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+        try:
+            self._catalog.clear()
+        except CatalogError as exc:
+            self._error(f"No se limpió el catálogo; queda intacto. {exc}")
+            return
+        self._records = []
+        self._last_save_error = None
+        self._summary()
+        self._render()
 
     def set_remote_torrents(self, torrents: list[dict] | None) -> None:
         self.commit_edits()
