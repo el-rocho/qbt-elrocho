@@ -1041,6 +1041,9 @@ class MainWindow(QMainWindow):
 
 def main() -> int:
     app = QApplication(sys.argv)
+    # El estilo nativo de Windows dibuja los QComboBox embebidos en la tabla con
+    # un texto fantasma (doble render). Fusion es consistente y lo evita.
+    app.setStyle("Fusion")
     window = MainWindow()
     window.show()
     QTimer.singleShot(0, window.startup_query)

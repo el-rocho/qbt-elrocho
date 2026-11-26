@@ -396,7 +396,7 @@ class LocalReviewTests(unittest.TestCase):
         window = self.window()
         window.import_files([str(source)])
         table = window.local_table
-        self.assertIn("selection-background-color", table.styleSheet())
+        self.assertIn("::item:selected", table.styleSheet())
         table.selectRow(0)
         QApplication.processEvents()
         self.assertEqual(table.cellWidget(0, 1).property("rowSelected"), True)
