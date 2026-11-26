@@ -47,6 +47,22 @@ class ConfigFileTests(ConfigTempDir):
 
         self.assertEqual(reopened, saved)
 
+    def test_legacy_config_preserves_values_and_enables_existing_startup(self):
+        path = self.dir / "legacy.json"
+        original = json.dumps({"version": 1, "base_url": "http://existing:9090",
+                               "directories": [{"path": "/library", "kind": "Libro"}]})
+        path.write_text(original, encoding="utf-8")
+        loaded = load(path)
+        self.assertTrue(getattr(loaded, "setup_completed", False))
+        self.assertTrue(loaded.query_on_startup)
+        self.assertEqual(loaded.connection_mode, "remote")
+        self.assertEqual(loaded.base_url, "http://existing:9090")
+        self.assertEqual(loaded.directories, (directory("/library", "Libro"),))
+        self.assertEqual(path.read_text(encoding="utf-8"), original)
+        save(loaded, path)
+        self.assertEqual(json.loads(path.read_text(encoding="utf-8"))["version"], 2)
+        self.assertEqual(load(path), loaded)
+
     def test_missing_file_loads_default(self):
         self.assertEqual(load(self.dir / "inexistente.json"), AppConfig())
 
@@ -57,6 +73,15 @@ class ConfigFileTests(ConfigTempDir):
         self.assertTrue(path.is_file())
         self.assertEqual(load(path), config())
 
+    def test_legacy_config_without_url_does_not_complete_setup(self):
+        path = self.dir / "legacy-sin-url.json"
+        path.write_text(json.dumps({"version": 1, "base_url": "", "directories": []}), encoding="utf-8")
+        loaded = load(path)
+        self.assertFalse(loaded.setup_completed)
+        self.assertEqual(loaded.base_url, "")
+        self.assertEqual(loaded.directories, ())
+        self.assertEqual(loaded.connection_mode, "remote")
+
     def test_rejects_invalid_json(self):
         path = self.dir / "corrupto.json"
         path.write_text("{esto no es json", encoding="utf-8")
@@ -64,6 +89,25 @@ class ConfigFileTests(ConfigTempDir):
         with self.assertRaises(ConfigError) as caught:
             load(path)
         self.assertIn("JSON", str(caught.exception))
+
+    def test_invalid_encoding_is_a_config_error_without_rewriting(self):
+        path = self.dir / "encoding.json"
+        path.write_bytes(b"\xff\xfe\x00")
+        with self.assertRaises(ConfigError):
+            load(path)
+        self.assertEqual(path.read_bytes(), b"\xff\xfe\x00")
+
+    def test_rejects_invalid_connection_options(self):
+        for field, value in (("connection_mode", "unknown"),
+                             ("connection_mode", []),
+                             ("setup_completed", "false"),
+                             ("query_on_startup", 1)):
+            with self.subTest(field=field, value=value):
+                path = self.dir / "invalid.json"
+                data = {"version": 2, "base_url": "http://localhost:8080", field: value}
+                path.write_text(json.dumps(data), encoding="utf-8")
+                with self.assertRaises(ConfigError):
+                    load(path)
 
     def test_rejects_non_object_json(self):
         path = self.dir / "lista.json"
@@ -197,7 +241,7 @@ class ConfigValidationTests(unittest.TestCase):
 
 class ContractShapeTests(unittest.TestCase):
     def test_app_config_field_order_defaults_and_immutability(self):
-        self.assertEqual(list(AppConfig.__dataclass_fields__), ["base_url", "directories"])
+        self.assertEqual(list(AppConfig.__dataclass_fields__), ["base_url", "directories", "connection_mode", "setup_completed", "query_on_startup"])
         self.assertEqual(AppConfig.__dataclass_fields__["base_url"].default, "")
         self.assertEqual(AppConfig.__dataclass_fields__["directories"].default, ())
         with self.assertRaises(AttributeError):

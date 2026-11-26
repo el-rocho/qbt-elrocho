@@ -2,6 +2,7 @@
 
 import sys
 import threading
+from dataclasses import replace
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -33,24 +34,11 @@ from .config import (
     load as load_config,
     save as save_config,
 )
+from .connection_dialog import ConnectionDialog, LOCAL_URL_SUGGESTION
 from .directory_dialog import DirectoryConfigDialog
 from .local_review import LocalReviewPanel
 from .qbittorrent import QBittorrentClient, QBittorrentError
 
-DEFAULT_URL = "http://10.0.4.56:8080"
-DEFAULT_PATHS = (
-    "/mnt/descargas/peliculas",
-    "/mnt/descargas/series",
-    "/mnt/descargas/libros",
-)
-DEFAULT_KINDS = ("Película", "Serie", "Libro")
-
-
-def _default_directories() -> tuple[DirectoryConfig, ...]:
-    """Directorios sembrados en la primera ejecución, migrando los valores fijos."""
-    return tuple(
-        DirectoryConfig(path, kind) for path, kind in zip(DEFAULT_PATHS, DEFAULT_KINDS)
-    )
 QUERY_TIMEOUT = 6.0  # inactividad por operación de socket, no plazo total
 # Persistencia de anchos de columna: solo geometría de la interfaz local.
 ORGANIZATION = "el-rocho"
@@ -86,6 +74,8 @@ def validate_base_url(raw: str) -> str:
     ValueError con IPv6 mal formada o puertos fuera de rango, de modo que ese
     caso también se traduce aquí en vez de escapar como excepción en la GUI.
     """
+    if any(ord(char) < 32 or ord(char) == 127 for char in raw):
+        raise ValueError("URL no válida: no puede contener caracteres de control.")
     text = raw.strip()
     if not text:
         raise ValueError("URL no válida: escriba la dirección de la WebUI.")
@@ -284,20 +274,23 @@ class MainWindow(QMainWindow):
         super().__init__()
         self._settings = settings if settings is not None else _create_settings()
         self._config_path: Path | None = None
-        self._app_config = AppConfig(directories=_default_directories())
+        self._app_config = AppConfig()
+        self._config_load_error = ""
+        self._setup_dialog: ConnectionDialog | None = None
         if hasattr(self._settings, "fileName"):
             self._config_path = Path(self._settings.fileName()).with_suffix(".json")
             if self._config_path.exists():
                 try:
                     self._app_config = load_config(self._config_path)
-                except ConfigError:
-                    pass  # se conservan los directorios por defecto
-        initial_url = DEFAULT_URL
+                except ConfigError as exc:
+                    self._config_load_error = str(exc)
+        initial_url = ""
         if self._app_config.base_url:
             try:
                 initial_url = validate_base_url(self._app_config.base_url)
-            except ValueError:
-                initial_url = DEFAULT_URL
+            except ValueError as exc:
+                self._config_load_error = str(exc)
+                self._app_config = AppConfig()
         self.setWindowTitle("Gestor qBittorrent — revisión local y consulta remota")
         self.resize(1000, 780)
         self.busy = False
@@ -338,9 +331,13 @@ class MainWindow(QMainWindow):
         url_row = QHBoxLayout()
         url_row.addWidget(QLabel("URL de la WebUI:"))
         self.url_edit = QLineEdit(initial_url)
-        self.url_edit.setPlaceholderText(DEFAULT_URL)
+        self.url_edit.setPlaceholderText(LOCAL_URL_SUGGESTION)
         self.url_edit.textChanged.connect(self._on_url_changed)
         url_row.addWidget(self.url_edit, 1)
+        self.connection_config_button = QPushButton("Configuración")
+        self.connection_config_button.setToolTip(str(self._config_path or "Configuración en memoria"))
+        self.connection_config_button.clicked.connect(self._open_connection_config)
+        url_row.addWidget(self.connection_config_button)
         self.version_button = QPushButton("Consultar versión")
         self.version_button.clicked.connect(self.query_version)
         url_row.addWidget(self.version_button)
@@ -356,6 +353,18 @@ class MainWindow(QMainWindow):
         # Las rutas remotas pueden contener "<" o "&": nunca interpretar HTML.
         self.connection_label.setTextFormat(Qt.TextFormat.PlainText)
         remote_layout.addWidget(self.connection_label)
+        self.config_status_label = QLabel()
+        self.config_status_label.setTextFormat(Qt.TextFormat.PlainText)
+        self.config_status_label.setWordWrap(True)
+        self.config_status_label.setToolTip(str(self._config_path or "Configuración en memoria"))
+        self.config_status_label.hide()
+        remote_layout.addWidget(self.config_status_label)
+        if self._config_load_error:
+            self._show_config_error(
+                "No se pudo cargar la configuración. Se conserva el archivo sin modificar. "
+                "Corrija o restaure una copia compatible y reinicie la aplicación. "
+                + self._config_load_error
+            )
         remote_layout.addSpacing(12)
 
         self.remote_tabs = QTabWidget()
@@ -429,6 +438,9 @@ class MainWindow(QMainWindow):
             "Solo lectura: no se envía ningún torrent, no se vigila nada y no se guardan credenciales"
         )
         self._restore_column_widths()
+        self._set_busy(False)
+        if self._app_config.connection_mode == "offline":
+            self._show_neutral("Modo sin conexión. Puede continuar con la revisión local.")
 
     # --- anchos de columna persistidos ----------------------------------
 
@@ -515,24 +527,37 @@ class MainWindow(QMainWindow):
                 "No hay directorios configurados. Abra «Configurar directorios».", DIRECTORY_CONTEXT
             )
 
+    def _show_config_error(self, message: str) -> None:
+        self.config_status_label.setText(message)
+        self.config_status_label.show()
+
+    def _store_config(self, updated: AppConfig) -> bool:
+        if self._config_load_error:
+            self._show_config_error(
+                "No se puede guardar la configuración: se conserva el archivo original. "
+                "Corríjalo o restaure una copia compatible y reinicie la aplicación."
+            )
+            return False
+        if self._config_path is not None:
+            try:
+                save_config(updated, self._config_path)
+            except ConfigError as exc:
+                self._show_config_error(f"No se pudo guardar la configuración: {exc}")
+                return False
+        self._app_config = updated
+        self.config_status_label.clear()
+        self.config_status_label.hide()
+        return True
+
     def _open_directory_config(self) -> None:
+        if self.busy or self._closing or self._config_load_error:
+            return
         dialog = DirectoryConfigDialog(self._app_config.directories, self)
         if dialog.exec() != QDialog.DialogCode.Accepted:
             return
         directories = dialog.directories() or []
-        self._app_config = AppConfig(
-            base_url=self._app_config.base_url, directories=tuple(directories)
-        )
-        if self._config_path is not None:
-            try:
-                save_config(self._app_config, self._config_path)
-            except ConfigError:
-                QMessageBox.warning(
-                    self,
-                    "Directorios no guardados",
-                    "No se pudieron guardar los directorios; los cambios no se conservarán "
-                    "al cerrar la aplicación.",
-                )
+        if not self._store_config(replace(self._app_config, directories=tuple(directories))):
+            return
         self._directory_cache.clear()
         self._rebuild_directory_tabs()
         self._restore_column_widths()
@@ -548,6 +573,8 @@ class MainWindow(QMainWindow):
 
     def _label_for_context(self, context: str) -> QLabel:
         """Etiqueta de origen de la consulta, no la pestaña visible al responder."""
+        if context == "setup" and self._setup_dialog is not None:
+            return self._setup_dialog.status_label
         if context == "torrents":
             return self.torrents_status_label
         if context.startswith("directory:"):
@@ -569,13 +596,17 @@ class MainWindow(QMainWindow):
 
     def _set_busy(self, busy: bool) -> None:
         self.busy = busy
-        for button in (self.version_button, self.torrents_button, self.directory_button,
-                       self.directory_config_button):
-            button.setEnabled(not busy)
+        offline = self._app_config.connection_mode == "offline"
+        for button in (self.version_button, self.torrents_button, self.directory_button):
+            button.setEnabled(not busy and not offline)
+        self.directory_config_button.setEnabled(not busy and not self._config_load_error)
+        self.connection_config_button.setEnabled(not busy)
         # Tras pedir la cancelación el botón se apaga, pero la ventana sigue
         # ocupada hasta que el hilo termina: nunca hay dos trabajos a la vez.
         self.cancel_button.setEnabled(busy and not self._cancel_requested)
-        self.url_edit.setEnabled(not busy)
+        self.url_edit.setEnabled(not busy and not offline)
+        if self._setup_dialog is not None:
+            self._setup_dialog.set_busy(busy)
 
     def _persist_url(self, raw: str) -> bool:
         """Guarda la URL si es válida; una URL incompleta o inválida no se escribe."""
@@ -583,14 +614,10 @@ class MainWindow(QMainWindow):
             normalized = validate_base_url(raw)
         except ValueError:
             return False
-        updated = AppConfig(base_url=normalized, directories=self._app_config.directories)
-        if self._config_path is not None:
-            try:
-                save_config(updated, self._config_path)
-            except ConfigError:
-                return False
-        self._app_config = updated
-        return True
+        if normalized == self._app_config.base_url:
+            return True
+        updated = replace(self._app_config, base_url=normalized)
+        return self._store_config(updated)
 
     def _on_url_changed(self, text: str) -> None:
         """Cambiar de servidor invalida los datos del anterior."""
@@ -621,7 +648,7 @@ class MainWindow(QMainWindow):
             self._show_neutral(IDLE_CONNECTION_TEXT)
 
     def _start_query(self, operation, context: str, busy_text: str) -> None:
-        if self.busy or self._closing:
+        if self.busy or self._closing or self._app_config.connection_mode == "offline":
             return
         try:
             base_url = validate_base_url(self.url_edit.text())
@@ -663,7 +690,7 @@ class MainWindow(QMainWindow):
         )
 
     def query_directories(self) -> None:
-        if self.busy or self._closing:
+        if self.busy or self._closing or self._app_config.connection_mode == "offline":
             return
         try:
             validate_base_url(self.url_edit.text())
@@ -684,9 +711,77 @@ class MainWindow(QMainWindow):
         ]
         self._run_batch(items, "Consultar directorios")
 
-    def startup_query(self) -> None:
-        """Consulta inicial al abrir la aplicación: torrents + todos los directorios."""
+    def _open_connection_config(self) -> None:
         if self.busy or self._closing:
+            return
+        if self._setup_dialog is None or not self._setup_dialog.isVisible():
+            if self._setup_dialog is not None:
+                self._setup_dialog.deleteLater()
+            self._setup_dialog = ConnectionDialog(self._app_config, self)
+            self._setup_dialog.save_button.clicked.connect(self._save_connection_config)
+            self._setup_dialog.test_button.clicked.connect(self._test_connection)
+            self._setup_dialog.rejected.connect(self._cancel_connection_test)
+        self._setup_dialog.show()
+        self._setup_dialog.raise_()
+
+    def _test_connection(self) -> None:
+        dialog = self._setup_dialog
+        if (dialog is None or self.busy or self._closing
+                or dialog.mode_combo.currentData() == "offline"):
+            return
+        try:
+            url = validate_base_url(dialog.url_edit.text())
+        except ValueError as exc:
+            dialog.status_label.setText(str(exc))
+            return
+        self._dispatch_query(lambda client: client.version(), "setup",
+                             "Comprobando conexión…",
+                             QBittorrentClient(url, timeout=QUERY_TIMEOUT))
+
+    def _cancel_connection_test(self) -> None:
+        if self._active_context == "setup":
+            self.cancel_query()
+
+    def _save_connection_config(self) -> None:
+        dialog = self._setup_dialog
+        if dialog is None or self.busy or self._closing:
+            return
+        mode = dialog.mode_combo.currentData()
+        try:
+            url = (self._app_config.base_url if mode == "offline"
+                   else validate_base_url(dialog.url_edit.text()))
+        except ValueError as exc:
+            dialog.status_label.setText(str(exc))
+            return
+        updated = replace(self._app_config, base_url=url, connection_mode=mode,
+                          setup_completed=True, query_on_startup=dialog.startup_check.isChecked())
+        if not self._store_config(updated):
+            dialog.status_label.setText(self.config_status_label.text())
+            return
+        # Sincroniza la cabecera sin repetir el guardado ni los efectos de
+        # cambio de servidor: la configuración ya quedó persistida.
+        self.url_edit.blockSignals(True)
+        try:
+            self.url_edit.setText(url)
+        finally:
+            self.url_edit.blockSignals(False)
+        self._set_busy(False)
+        self._show_neutral(
+            "Modo sin conexión. Puede continuar con la revisión local." if mode == "offline" else
+            "Configuración guardada. Consulte desde una pestaña cuando lo desee."
+        )
+        dialog.accept()
+
+    def startup_query(self) -> None:
+        """Configura el primer inicio; solo consulta una conexión confirmada."""
+        if self.busy or self._closing:
+            return
+        if self._config_load_error:
+            return
+        if not self._app_config.setup_completed:
+            self._open_connection_config()
+            return
+        if self._app_config.connection_mode == "offline" or not self._app_config.query_on_startup:
             return
         try:
             validate_base_url(self.url_edit.text())
@@ -804,7 +899,7 @@ class MainWindow(QMainWindow):
     def _on_success(self, request_id: int, context: str, payload) -> None:
         if self._closing or self._cancel_requested or request_id != self._active_id:
             return
-        if context == "version":
+        if context in {"version", "setup"}:
             self._show_status(f"Conectado. Versión de qBittorrent: {payload}", context)
         elif context == "torrents":
             self._fill_torrents(payload)

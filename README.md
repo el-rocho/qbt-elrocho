@@ -1,7 +1,7 @@
 # qbt-elrocho — Gestión qBittorrent
 
 Aplicación de escritorio para Windows y Linux que organizará los archivos
-`.torrent` descargados a mano y los enviará a una instancia remota de
+`.torrent` descargados a mano y los enviará a una instancia local o remota de
 qBittorrent, con revisión y aprobación previas.
 
 **Estado: prototipo en desarrollo.** La interfaz mantiene la revisión local de
@@ -14,19 +14,18 @@ escritura remota; las consultas del servidor siguen siendo temporales.
 No se envía ningún torrent en esta etapa. Antes de habilitar conexiones de
 escritura se mantendrá la revisión y aprobación explícita por lote.
 
-Desde Windows `10.0.4.20` se comprobó la WebUI y la API (`v5.3.0`). El
-25-11-2026 se corrigió la persistencia del bypass anónimo `10.0.4.20/32`:
-el archivo de configuración del servidor tenía el atributo inmutable, que
-impedía guardar los cambios. Tras retirarlo, aplicar la restricción y detener
-y arrancar limpiamente el servicio, el archivo conserva `/32` y proxmox1
-recibe HTTP 403 sin autenticación. No se modificó el cortafuegos ni el código
-de la aplicación durante esa intervención. La prueba posterior desde Windows
-fue confirmada sin pedir autenticación. Por decisión del administrador se volvió
-a activar el atributo inmutable sobre la configuración corregida: para futuros
-cambios de preferencias habrá que desbloquearlo temporalmente y verificar el
-guardado antes de volver a protegerlo. El detalle operativo y las copias de
-configuración permanecen en la documentación privada del Vault y en el servidor,
-no en este repositorio.
+## Instalación y configuración inicial
+
+Consulte la [guía de configuración](docs/configuracion.md): instalación, primer
+inicio, URL, directorios, almacenamiento y recuperación de errores.
+
+**Generalización, fase 1 implementada en el árbol de desarrollo:** las nuevas
+instalaciones no incluyen ningún servidor ni directorio personal. Un diálogo
+permite elegir instalación local, otro entorno o trabajo sin conexión, probar
+la versión y guardar la preferencia de consulta al iniciar. Las configuraciones
+anteriores válidas se conservan. Aún no hay inicio de sesión desde la interfaz,
+importación de carpetas ni detección de capacidades. Windows sigue pendiente de
+validación manual de esta fase.
 
 ## Interfaz
 
@@ -40,19 +39,22 @@ a la cabecera de conexión; Revisión local conserva su estilo.
   elegir un destino y marcar Incluir. Los archivos originales no se modifican,
   no se abren conexiones desde este panel y marcar una fila **no envía ni
   aprueba un lote**. Las tablas remotas continúan sin permitir edición.
-- **Cabecera común de qBittorrent:** URL editable solo cuando no hay trabajo
-  (por defecto `http://10.0.4.56:8080`), botón «Consultar versión» y botón
+- **Cabecera común de qBittorrent:** URL editable cuando no hay trabajo y no se
+  está en modo sin conexión (vacía en instalaciones nuevas), botón «Configuración», «Consultar versión» y botón
   «Cancelar consulta». Los mensajes de «Consultar versión» aparecen en la
   etiqueta común bajo la URL. La URL válida se guarda al editarla y se restaura
-  al reabrir.
+  al reabrir. En una instalación nueva, confirme el asistente con «Guardar»
+  para completar la configuración; escribir en la cabecera no lo completa.
 - **Pestaña «Torrents»:** botón «Consultar torrents», su etiqueta de estado y
   la tabla de solo lectura con nombre, estado traducido, progreso y destino
-  (`save_path`). La tabla no se puede editar. Al abrir la aplicación se consulta
-  automáticamente; si la conexión falla se muestra un aviso modal (también al
+  (`save_path`). La tabla no se puede editar. Al abrir, se consulta si la
+  conexión está configurada, no está en modo sin conexión y la consulta inicial
+  está activada; si la conexión falla se muestra un aviso modal (también al
   pulsar el botón manualmente).
 - **Pestaña «Archivos descargados»:** botón «Configurar directorios», que abre
   un diálogo para definir y ajustar todas las rutas de descarga y su tipo
-  (Película, Serie, Libro, Otros o «Sin determinar» como comodín). Botón
+  (Película, Serie, Libro, Otros o «Sin determinar» como comodín). La lista está
+  vacía en instalaciones nuevas; no se crean carpetas automáticamente. Botón
   «Consultar directorios», que consulta **todos** los directorios configurados
   de una vez; cada uno se muestra en su propia pestaña interna con la tabla de
   archivos y carpetas del nivel inmediato. La lectura **no es recursiva**: solo
@@ -74,8 +76,9 @@ a la cabecera de conexión; Revisión local conserva su estilo.
   `http://[::1`), puertos no numéricos o fuera de 1–65535, credenciales
   embebidas (`usuario:clave@`), query y fragmento. El error se muestra en la
   etiqueta de la consulta que se intentó iniciar y no se envía ninguna petición.
-- **Consulta inicial:** al abrir, la aplicación consulta automáticamente los
-  torrents y todos los directorios configurados, mostrando un diálogo modal de
+- **Consulta inicial:** tras confirmar la configuración, y salvo que se desactive
+  o se elija modo sin conexión, se consultan automáticamente los torrents y
+  todos los directorios configurados, mostrando un diálogo modal de
   progreso mientras se ejecutan las llamadas secuenciales y, al terminar, un
   único aviso agregado con el resultado (o los errores) de cada consulta. No se
   guardan credenciales ni claves.
@@ -115,7 +118,10 @@ los destinos de las filas revisadas.
   es que el título ya exista en un destino guardado o, para series, como carpeta
   en los listados leídos al inicio, en cuyo caso se reutiliza esa ubicación.
   El tipo «Otros» agrupa lo que no es película, serie ni libro; un directorio
-  «Sin determinar» actúa como respaldo cuando no hay uno del tipo concreto. La
+  «Sin determinar» actúa como respaldo cuando no hay uno del tipo concreto.
+  Borrar los directorios no elimina las propuestas procedentes del catálogo.
+  **Límite pendiente:** los destinos previos aún no están asociados a un servidor;
+  al cambiar de instalación, revíselos antes de utilizarlos. La
   aplicación no añade subcarpetas de serie/temporada: la estructura del torrent
   y la configuración del servidor siguen mandando.
 - **Identidad exacta:** calcula el infohash sobre los bytes originales del
@@ -228,17 +234,20 @@ consultas registradas por cada prueba; cualquier otra ruta devuelve `404` y los
 métodos distintos de `GET` devuelven `405`. No se contacta el servidor real.
 
 ```bash
-env -u PYTHONPATH \
-  LD_LIBRARY_PATH=/home/hermes/.hermes/tools/headless-egl \
-  QT_QPA_PLATFORM=offscreen \
-  .venv/bin/python -m unittest discover -s tests -v
+# Linux, desde la raíz del repositorio y con el entorno virtual activado:
+QT_QPA_PLATFORM=offscreen python -m unittest discover -s tests -v
 ```
 
-En un escritorio con `libEGL.so.1` disponible basta con
-`QT_QPA_PLATFORM=offscreen` y sin `LD_LIBRARY_PATH`. El stub de EGL de esta
-máquina headless solo aporta esa biblioteca; no se instala nada en el sistema.
+```powershell
+# Windows, desde PowerShell y con el entorno virtual activado:
+$env:QT_QPA_PLATFORM = "offscreen"
+python -m unittest discover -s tests -v
+```
+
+Se necesitan las bibliotecas de sistema de Qt; las pruebas offscreen no
+sustituyen una comprobación visual y manual en cada plataforma.
 
 ## Documentación
 
-La documentación funcional y el seguimiento están en el Vault Obsidian, en
-`Gestión qBittorrent/` del perfil `default`.
+La [guía de configuración](docs/configuracion.md) y este README contienen las
+instrucciones públicas. No se necesita acceso a documentación privada.

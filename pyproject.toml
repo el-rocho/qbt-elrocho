@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "qbt-elrocho"
 version = "0.1.0"
-description = "Organización y envío de archivos .torrent a una instancia remota de qBittorrent"
+description = "Organización y envío de archivos .torrent a una instancia local o remota de qBittorrent"
 readme = "README.md"
 requires-python = ">=3.11"
 authors = [{ name = "el-rocho" }]

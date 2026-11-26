@@ -10,9 +10,11 @@ from PySide6.QtCore import QSettings, Qt
 from PySide6.QtWidgets import QApplication, QAbstractItemView, QLineEdit
 from PySide6.QtTest import QTest
 
-from qbt.app import DEFAULT_PATHS, MainWindow
+from qbt.app import MainWindow
+
+DEFAULT_PATHS = ("/library/movies", "/library/series", "/library/books")
 from qbt.catalog import CatalogError
-from qbt.config import AppConfig, DirectoryConfig
+from qbt.config import AppConfig, DirectoryConfig, save as save_config
 from qbt.torrent import read_torrent
 
 
@@ -35,6 +37,10 @@ class LocalReviewTests(unittest.TestCase):
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
         self.windows = []
+        save_config(AppConfig(directories=tuple(
+            DirectoryConfig(path, kind) for path, kind in
+            zip(DEFAULT_PATHS, ("Película", "Serie", "Libro"))
+        )), self.root / "widths.json")
 
     def window(self):
         settings = QSettings(str(self.root / "widths.ini"), QSettings.Format.IniFormat)

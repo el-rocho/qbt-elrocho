@@ -14,7 +14,7 @@ import tempfile
 from dataclasses import dataclass, replace
 from pathlib import Path, PureWindowsPath
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 # Tipos de directorio. "Sin determinar" actúa como comodín (respaldo): un
 # directorio donde el usuario guarda archivos de cualquier tipo.
@@ -35,6 +35,9 @@ class DirectoryConfig:
 class AppConfig:
     base_url: str = ""
     directories: tuple[DirectoryConfig, ...] = ()
+    connection_mode: str = "local"
+    setup_completed: bool = False
+    query_on_startup: bool = True
 
 
 def _is_absolute_path(value: str) -> bool:
@@ -86,6 +89,10 @@ def _validate(config: AppConfig) -> AppConfig:
         raise ConfigError("La URL base debe ser texto")
     if any(ord(char) < 32 for char in config.base_url):
         raise ConfigError("La URL base no puede contener caracteres de control")
+    if config.connection_mode not in ("local", "remote", "offline"):
+        raise ConfigError("Modo de conexión no válido")
+    if type(config.setup_completed) is not bool or type(config.query_on_startup) is not bool:
+        raise ConfigError("Las opciones de inicio deben ser booleanas")
     return replace(config, directories=validate_directories(config.directories))
 
 
@@ -96,6 +103,8 @@ def load(path: str | Path) -> AppConfig:
         return AppConfig()
     try:
         text = target.read_text(encoding="utf-8")
+    except UnicodeError:
+        raise ConfigError("La configuración no es texto UTF-8 válido") from None
     except OSError as exc:
         raise ConfigError(f"No se pudo leer la configuración: {exc}") from None
     try:
@@ -105,7 +114,7 @@ def load(path: str | Path) -> AppConfig:
     if not isinstance(data, dict):
         raise ConfigError("La configuración debe ser un objeto JSON")
     version = data.get("version")
-    if version != SCHEMA_VERSION:
+    if type(version) is not int or version not in (1, SCHEMA_VERSION):
         raise ConfigError(
             f"Versión de configuración desconocida: {version!r} "
             f"(se esperaba {SCHEMA_VERSION}); no se modifica el archivo"
@@ -119,7 +128,14 @@ def load(path: str | Path) -> AppConfig:
         if not isinstance(entry, dict):
             raise ConfigError("Cada directorio debe ser un objeto JSON")
         raw_directories.append(DirectoryConfig(entry.get("path", ""), entry.get("kind", "")))
-    return _validate(AppConfig(base_url=base_url, directories=tuple(raw_directories)))
+    options = (
+        {"connection_mode": "remote", "setup_completed": bool(base_url), "query_on_startup": True}
+        if version == 1 else
+        {"connection_mode": data.get("connection_mode", "local"),
+         "setup_completed": data.get("setup_completed", False),
+         "query_on_startup": data.get("query_on_startup", True)}
+    )
+    return _validate(AppConfig(base_url=base_url, directories=tuple(raw_directories), **options))
 
 
 def save(config: AppConfig, path: str | Path) -> None:
@@ -133,6 +149,9 @@ def save(config: AppConfig, path: str | Path) -> None:
     payload = {
         "version": SCHEMA_VERSION,
         "base_url": validated.base_url,
+        "connection_mode": validated.connection_mode,
+        "setup_completed": validated.setup_completed,
+        "query_on_startup": validated.query_on_startup,
         "directories": [
             {"path": directory.path, "kind": directory.kind}
             for directory in validated.directories

@@ -32,7 +32,7 @@ class DirectoryConfigDialog(QDialog):
         layout = QVBoxLayout(self)
 
         hint = QLabel(
-            "Rutas absolutas del servidor (p. ej. /mnt/descargas/peliculas). "
+            "Rutas absolutas tal como las ve qBittorrent (p. ej. C:\\Descargas o /home/usuario/Descargas). "
             "Solo se consulta el nivel inmediato; no se hace lectura recursiva."
         )
         hint.setWordWrap(True)

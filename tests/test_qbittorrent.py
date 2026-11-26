@@ -109,6 +109,30 @@ class QBittorrentClientTests(unittest.TestCase):
         self.assertIn("no autorizado", message.lower())
         self.assertNotIn("qbt_secret_key", message)
 
+    def test_http_error_response_is_closed_before_reporting(self):
+        from urllib.error import HTTPError
+        from urllib.request import urlopen
+        from unittest import mock
+        for status in (401, 403, 500):
+            with self.subTest(status=status):
+                self.route("/api/v2/app/version", b"denied", status=status)
+                errors = []
+                def capture(*args, **kwargs):
+                    try:
+                        return urlopen(*args, **kwargs)
+                    except HTTPError as exc:
+                        errors.append(exc)
+                        raise
+                try:
+                    with mock.patch("qbt.qbittorrent.urlopen", side_effect=capture):
+                        with self.assertRaises(QBittorrentError):
+                            QBittorrentClient(self.base_url).version()
+                    self.assertEqual(len(errors), 1)
+                    self.assertTrue(errors[0].closed)
+                finally:
+                    for error in errors:
+                        error.close()
+
     def test_empty_body_is_not_success(self):
         self.route("/api/v2/app/version", b"")
         with self.assertRaises(QBittorrentError) as caught:

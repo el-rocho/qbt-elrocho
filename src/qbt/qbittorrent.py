@@ -52,6 +52,9 @@ class QBittorrentClient:
             with urlopen(request, timeout=self.timeout) as response:
                 content = response.read(self.max_response_bytes + 1)
         except HTTPError as exc:
+            # HTTPError también es una respuesta abierta; se cierra antes de
+            # traducir el error para no retener sockets entre reintentos.
+            exc.close()
             if exc.code == 403:
                 raise QBittorrentError(
                     f"Acceso no autorizado (HTTP 403) para {endpoint}. "

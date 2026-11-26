@@ -21,15 +21,24 @@ from qbt.app import (
     APPLICATION,
     COLUMN_WIDTHS_GROUP,
     DEFAULT_COLUMN_WIDTHS,
-    DEFAULT_PATHS,
-    DEFAULT_URL,
     IDLE_CONNECTION_TEXT,
     IDLE_DIRECTORY_TEXT,
     IDLE_TORRENTS_TEXT,
     ORGANIZATION,
     MainWindow,
 )
-from qbt.config import AppConfig, DirectoryConfig
+from qbt.config import AppConfig, DirectoryConfig, save as save_config
+
+# Fixtures explícitos: la aplicación ya no siembra rutas ni servidores.
+DEFAULT_URL = "http://localhost:8080"
+DEFAULT_PATHS = ("/library/movies", "/library/series", "/library/books")
+
+def seed_config(path, url=DEFAULT_URL):
+    save_config(AppConfig(base_url=url, directories=tuple(
+        DirectoryConfig(path, kind) for path, kind in
+        zip(DEFAULT_PATHS, ("Película", "Serie", "Libro"))
+    ), setup_completed=True), path)
+
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -110,6 +119,12 @@ def read_text(path: str) -> str:
 
 
 def window_tables(window: MainWindow) -> dict[str, object]:
+    # Las pruebas de geometría necesitan una tabla de directorio explícita.
+    if not window.directory_tables:
+        from dataclasses import replace
+        window._app_config = replace(window._app_config, directories=(DirectoryConfig("/library", "Otros"),))
+        window._rebuild_directory_tabs()
+        window._restore_column_widths()
     return {
         "local": window.local_table,
         "torrents": window.torrents_table,
@@ -242,6 +257,7 @@ class MainWindowTests(unittest.TestCase):
         self.prefs = tempfile.TemporaryDirectory()
         self.addCleanup(self.prefs.cleanup)
         isolate_settings(self, self.prefs.name)
+        seed_config(config_file(self.prefs.name), self.base_url)
         self.window = MainWindow()
         self.window.url_edit.setText(self.base_url)
         self.window.show()
@@ -275,7 +291,8 @@ class MainWindowTests(unittest.TestCase):
 
     def set_directories(self, directories):
         self.window._app_config = AppConfig(
-            base_url=self.window._app_config.base_url, directories=tuple(directories)
+            base_url=self.window._app_config.base_url, directories=tuple(directories),
+            setup_completed=True,
         )
         self.window._rebuild_directory_tabs()
         self.window._restore_column_widths()
@@ -403,7 +420,7 @@ class MainWindowTests(unittest.TestCase):
             self.window.directory_tabs,
         ):
             self.assertTrue(directory_page.isAncestorOf(widget))
-        # Una pestaña por cada directorio configurado (sembrado por defecto).
+        # Una pestaña por cada directorio configurado (creado por el fixture).
         self.assertEqual(self.window.directory_tabs.count(), 3)
         self.assertEqual(self.window.directory_tabs.tabText(0), DEFAULT_PATHS[0])
         # Ninguna tabla ni etiqueta se comparte entre pestañas.
@@ -587,6 +604,39 @@ class MainWindowTests(unittest.TestCase):
             dialog._accept()
         self.assertIsNone(dialog.directories())
         self.assertEqual(warning.call_count, 1)
+
+    def test_connection_probe_uses_draft_without_saving_or_querying_directories(self):
+        self.route("/api/v2/app/version", "v5.3.0", delay=0.1)
+        original = read_text(config_file(self.prefs.name))
+        self.window.connection_config_button.click()
+        dialog = self.window._setup_dialog
+        dialog.url_edit.setText(self.base_url)
+        dialog.test_button.click()
+        self.assertTrue(self.window.busy)
+        self.assertFalse(dialog.save_button.isEnabled())
+        self.assertTrue(wait_until(lambda: not self.window.busy))
+        self.assertIn("5.3.0", dialog.status_label.text())
+        self.assertEqual([r["path"] for r in self.requests()], ["/api/v2/app/version"])
+        self.assertEqual(read_text(config_file(self.prefs.name)), original)
+        self.assertTrue(dialog.save_button.isEnabled())
+        dialog.url_edit.setText("http://localhost:9999")
+        self.assertNotIn("5.3.0", dialog.status_label.text())
+
+    def test_connection_probe_error_does_not_save_and_dialog_close_discards_result(self):
+        self.route("/api/v2/app/version", b"", status=403, delay=0.1)
+        self.window.connection_config_button.click()
+        dialog = self.window._setup_dialog
+        dialog.test_button.click()
+        self.assertTrue(wait_until(lambda: not self.window.busy))
+        self.assertIn("403", dialog.status_label.text())
+        self.warning_mock.assert_not_called()
+        self.route("/api/v2/app/version", "v5.3.0", delay=0.2)
+        dialog.test_button.click()
+        dialog.reject()
+        self.assertTrue(wait_until(lambda: not self.window.busy))
+        self.assertNotIn("5.3.0", dialog.status_label.text())
+        self.window.connection_config_button.click()
+        self.assertIsNot(self.window._setup_dialog, dialog)
 
     # --- consulta inicial y avisos agregados ---------------------------
 
@@ -933,18 +983,18 @@ class MainWindowTests(unittest.TestCase):
             reopened.deleteLater()
             QApplication.processEvents()
 
-    def test_startup_without_config_uses_default_url(self):
+    def test_startup_without_config_has_empty_url(self):
         root = tempfile.mkdtemp(dir=self.prefs.name)
         QSettings.setPath(QSettings.Format.IniFormat, QSettings.Scope.UserScope, root)
         window = MainWindow()
         try:
-            self.assertEqual(window.url_edit.text(), DEFAULT_URL)
+            self.assertEqual(window.url_edit.text(), "")
         finally:
             window.close()
             window.deleteLater()
             QApplication.processEvents()
 
-    def test_invalid_stored_url_falls_back_to_default(self):
+    def test_invalid_stored_url_does_not_fall_back_to_another_server(self):
         root = tempfile.mkdtemp(dir=self.prefs.name)
         QSettings.setPath(QSettings.Format.IniFormat, QSettings.Scope.UserScope, root)
         path = config_file(root)
@@ -955,7 +1005,7 @@ class MainWindowTests(unittest.TestCase):
             )
         window = MainWindow()
         try:
-            self.assertEqual(window.url_edit.text(), DEFAULT_URL)
+            self.assertEqual(window.url_edit.text(), "")
         finally:
             window.close()
             window.deleteLater()
