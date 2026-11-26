@@ -115,6 +115,40 @@ class _ServerTestCase(unittest.TestCase):
 
 
 class LoginTests(_ServerTestCase):
+    def test_login_accepts_204_with_cookie_and_reuses_session(self):
+        self.add_login_route(status=204, body=b"")
+        self.protect("/api/v2/app/version", body=b"v5.3.0")
+        client = QBittorrentClient(self.base_url)
+        self.assertIsNone(client.login("admin", "clave"))
+        self.assertTrue(client.authenticated)
+        self.assertEqual(client.version(), "v5.3.0")
+        self.assertEqual(self.server.requests[-1]["cookie"], SID_COOKIE)
+
+    def test_login_204_requires_usable_cookie(self):
+        for cookie in (None, f"{SID_COOKIE}; Path=/other/", f"{SID_COOKIE}; Path=/; Secure"):
+            with self.subTest(cookie=cookie):
+                headers = {"Set-Cookie": cookie} if cookie else {}
+                self.route("POST", "/api/v2/auth/login", 204, b"", headers)
+                client = QBittorrentClient(self.base_url)
+                with self.assertRaises(QBittorrentAuthError):
+                    client.login("admin", "clave")
+                self.assertFalse(client.authenticated)
+                self.route("GET", "/api/v2/app/version", 200, b"v5.3.0")
+                client.version()
+                self.assertIsNone(self.server.requests[-1]["cookie"])
+
+    def test_unexpected_success_status_is_not_a_login(self):
+        for status in (201, 202, 206):
+            with self.subTest(status=status):
+                self.add_login_route(status=status)
+                client = QBittorrentClient(self.base_url)
+                with self.assertRaises(QBittorrentAuthError):
+                    client.login("admin", "clave")
+                self.assertFalse(client.authenticated)
+                self.route("GET", "/api/v2/app/version", 200, b"v5.3.0")
+                client.version()
+                self.assertIsNone(self.server.requests[-1]["cookie"])
+
     def test_oversized_login_response_discards_cookie(self):
         self.add_login_route(body=b"Ok." + b" " * 80)
         client = QBittorrentClient(self.base_url, max_response_bytes=32)
@@ -225,6 +259,16 @@ class LoginTests(_ServerTestCase):
 
 
 class SessionTests(_ServerTestCase):
+    def test_empty_204_is_still_invalid_for_data_endpoints(self):
+        for endpoint, operation in (
+            ("/api/v2/app/version", lambda client: client.version()),
+            ("/api/v2/torrents/info?includeFiles=false", lambda client: client.torrents_info()),
+        ):
+            with self.subTest(endpoint=endpoint):
+                self.route("GET", endpoint, 204, b"")
+                with self.assertRaisesRegex(QBittorrentError, "vacía"):
+                    operation(QBittorrentClient(self.base_url))
+
     def test_unauthenticated_request_raises_auth_error_and_no_cookie(self):
         self.route("GET", "/api/v2/app/version", 401, b"")
         client = QBittorrentClient(self.base_url)

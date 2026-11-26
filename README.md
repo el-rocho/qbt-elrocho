@@ -27,6 +27,9 @@ acceso sin credenciales siguen funcionando. Contraseña y cookies no se escriben
 en disco; la sesión se pierde al cerrar. La compatibilidad se deduce de la versión
 de Web API, no demuestra permisos de carpetas ni de escritura. La autenticación
 está implementada; su validación manual en Windows sigue pendiente.
+El login admite tanto la respuesta antigua HTTP 200 con `Ok.` como HTTP 204
+sin cuerpo de servidores recientes; en ambos casos exige una cookie utilizable.
+No hace falta activar «Eludir autenticación para clientes en localhost».
 Aún no hay importación de carpetas ni aislamiento de destinos por servidor.
 
 ## Interfaz

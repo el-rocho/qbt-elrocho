@@ -148,7 +148,7 @@ class QBittorrentClient:
         data: bytes | None = None,
         allow_empty: bool = False,
         send_api_key: bool = True,
-    ) -> bytes:
+    ) -> tuple[int, bytes]:
         url = f"{self.base_url}/api/v2/{endpoint}"
         if params:
             url += "?" + urlencode(params)
@@ -164,6 +164,7 @@ class QBittorrentClient:
         self._cookies.add_cookie_header(request)
         try:
             with urlopen(request, timeout=self.timeout) as response:
+                status = response.status
                 self._cookies.extract_cookies(response, request)
                 content = response.read(self.max_response_bytes + 1)
         except HTTPError as exc:
@@ -180,24 +181,25 @@ class QBittorrentClient:
             )
         if not content and not allow_empty:
             raise QBittorrentError(f"Respuesta vacía de qBittorrent para {endpoint}")
-        return content
+        return status, content
 
     def _get(self, endpoint: str, params: dict[str, str] | None = None) -> bytes:
-        return self._request("GET", endpoint, params=params)
+        _status, content = self._request("GET", endpoint, params=params)
+        return content
 
     def login(self, username: str, password: str) -> None:
-        """Crea la sesión en memoria. Solo ``Ok.`` con cookie se acepta.
+        """Crea la sesión: HTTP 200 ``Ok.`` o HTTP 204 sin cuerpo, con cookie.
 
         Las credenciales viajan en el cuerpo del formulario y no se guardan.
-        Cualquier respuesta distinta de ``Ok.``, un rechazo 401/403 o una
-        redirección limpian la sesión y no dejan cookie reutilizable.
+        La API reciente usa 204; la antigua devuelve ``Ok.``. Cualquier otra
+        respuesta o error limpia la sesión y no deja cookie reutilizable.
         """
         endpoint = "auth/login"
         # Se descarta cualquier sesión previa: el login sustituye la sesión.
         self.clear_session()
         data = urlencode({"username": username, "password": password}).encode("utf-8")
         try:
-            content = self._request(
+            status, content = self._request(
                 "POST", endpoint, data=data, allow_empty=True, send_api_key=False
             )
         except QBittorrentError:
@@ -207,7 +209,8 @@ class QBittorrentClient:
             text = content.decode("utf-8").strip()
         except UnicodeDecodeError:
             text = ""
-        if text != "Ok.":
+        accepted = (status == 200 and text == "Ok.") or (status == 204 and not content)
+        if not accepted:
             self.clear_session()
             raise QBittorrentAuthError(
                 f"qBittorrent rechazó las credenciales en {endpoint}"

@@ -94,6 +94,12 @@ para la aplicación. Compruebe sus ajustes y pruebe la dirección en su navegado
 sesión con las credenciales del formulario. Para un servidor protegido, use
 **Comprobar acceso y funciones**.
 
+No necesita activar **Eludir autenticación para clientes en localhost** para
+conectar mediante usuario y contraseña. El cliente admite la respuesta antigua
+HTTP 200 con `Ok.` y la reciente HTTP 204 sin cuerpo; ambas requieren una cookie
+de sesión utilizable. Una respuesta vacía en las consultas de datos sigue siendo
+un error, no una lista vacía válida.
+
 La sesión vive únicamente en memoria y se reutiliza en las consultas de la
 ventana, también en lotes. No se guarda el usuario, la contraseña ni la cookie
 en JSON, SQLite o INI; no hay opción de recordarlos en esta fase. Al cerrar o

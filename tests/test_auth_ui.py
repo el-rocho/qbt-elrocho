@@ -28,10 +28,11 @@ class _AuthHandler(BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(b"Fails.")
             return
-        self.send_response(200)
+        self.send_response(self.server.login_status)
         self.send_header("Set-Cookie", "SID=demo-session; Path=/proxy/; HttpOnly")
         self.end_headers()
-        self.wfile.write(b"Ok.")
+        if self.server.login_status != 204:
+            self.wfile.write(b"Ok.")
 
     def do_GET(self):
         self.server.requests.append((self.command, self.path, self.headers.get("Cookie")))
@@ -88,6 +89,7 @@ class AuthUiTests(unittest.TestCase):
         self.server.expired = False
         self.server.delay = 0
         self.server.api_version = b"2.16.2"
+        self.server.login_status = 200
         self.warning = mock.patch("qbt.app.QMessageBox.warning").start()
         self.information = mock.patch("qbt.app.QMessageBox.information").start()
         self.addCleanup(mock.patch.stopall)
@@ -106,6 +108,18 @@ class AuthUiTests(unittest.TestCase):
         self.window.deleteLater()
         QApplication.processEvents()
         self.temp.cleanup()
+
+    def test_modern_204_login_can_be_applied_and_query_torrents(self):
+        self.server.login_status = 204
+        self.login()
+        self.dialog.save_button.click()
+        self.assertFalse(self.dialog.isVisible())
+        self.assertTrue(self.window._client.authenticated)
+        self.window.query_torrents()
+        self.assertTrue(wait_until(lambda: not self.window.busy))
+        self.assertEqual(self.window.torrents_table.rowCount(), 1)
+        self.assertEqual(self.server.requests[-1][2], "SID=demo-session")
+        self.warning.assert_not_called()
 
     def test_login_is_staged_until_save_then_used_for_queries(self):
         dialog = self.dialog
