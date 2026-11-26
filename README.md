@@ -1,5 +1,7 @@
 # qbt-elrocho — Gestión qBittorrent
 
+![Logo de qbt-elrocho](src/qbt/assets/qbt-elrocho.png)
+
 Aplicación de escritorio para Windows y Linux que organizará los archivos
 `.torrent` descargados a mano y los enviará a una instancia local o remota de
 qBittorrent, con revisión y aprobación previas.
@@ -26,10 +28,15 @@ y comprobar las versiones de qBittorrent y Web API. Los servidores que permiten
 acceso sin credenciales siguen funcionando. Contraseña y cookies no se escriben
 en disco; la sesión se pierde al cerrar. La compatibilidad se deduce de la versión
 de Web API, no demuestra permisos de carpetas ni de escritura. La autenticación
-está implementada; su validación manual en Windows sigue pendiente.
+está implementada. Conexión y consulta de directorios validadas manualmente en
+Windows el 26-11-2026 con la corrección de login `042ec7a`.
 El login admite tanto la respuesta antigua HTTP 200 con `Ok.` como HTTP 204
 sin cuerpo de servidores recientes; en ambos casos exige una cookie utilizable.
 No hace falta activar «Eludir autenticación para clientes en localhost».
+Para los directorios de Windows, copie la ruta completa de una carpeta existente
+desde el Explorador (Ctrl+L), sin comillas; por ejemplo,
+`C:\Users\Ana\Downloads`, si esa es su ubicación real. El nombre visible «Descargas»
+no permite deducir la ruta; `C:\Descargas` solo sirve si existe esa carpeta.
 Aún no hay importación de carpetas ni aislamiento de destinos por servidor.
 
 ## Interfaz

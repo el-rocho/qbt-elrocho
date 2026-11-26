@@ -1,9 +1,10 @@
 # Instalación y configuración
 
 Esta guía incluye la configuración neutral, la autenticación con sesión propia
-y la comprobación de compatibilidad de la Web API. La validación manual de esta
-fase en Windows sigue pendiente. La aplicación no envía torrents, no inicia
-descargas y no cambia preferencias del servidor.
+y la comprobación de compatibilidad de la Web API. Conexión y consulta de
+directorios validadas manualmente en Windows el 26-11-2026, con la corrección
+de login `042ec7a`. La aplicación no envía torrents, no inicia descargas y no
+cambia preferencias del servidor.
 
 ## Instalar y abrir
 
@@ -32,8 +33,9 @@ no es un fallo de conexión con qBittorrent. No ejecute la aplicación como root
 
 Para desarrollar con los cambios del repositorio sin reinstalar en cada edición,
 use `python -m pip install -e .` con el intérprete del entorno virtual.
-Esta fase se comprueba automáticamente en Linux offscreen; la comprobación manual
-en Windows sigue pendiente. Aún no se distribuyen instaladores autónomos.
+Las pruebas automáticas se ejecutan en Linux offscreen y la conexión y consulta
+de directorios se han validado manualmente en Windows. Esto no acredita una
+batería automática en Windows ni otros entornos. Aún no se distribuyen instaladores autónomos.
 
 ## Primer inicio
 
@@ -136,9 +138,24 @@ Ejemplos orientativos, no valores preinstalados:
 
 | Entorno de qBittorrent | Ejemplo de destino |
 |---|---|
-| Windows local | `C:\Usuarios\Ana\Descargas` o una ruta real de otra unidad |
+| Windows local | `C:\Users\Ana\Downloads`, solo si esa es la ubicación real, u otra ruta completa existente |
 | Linux local o remoto | `/home/ana/Descargas` |
 | Contenedor | `/downloads`, solo si esa es la ruta montada dentro del contenedor |
+
+### Obtener la ruta real en Windows
+
+1. Abra en el Explorador la carpeta que quiere consultar.
+2. Pulse **Ctrl+L** en la barra de dirección y copie la ruta completa.
+3. Péguela en **Configurar directorios**, sin comillas y sin duplicar las barras.
+
+El nombre visible **Descargas** puede corresponder, por ejemplo, a
+`C:\Users\Ana\Downloads`, estar en OneDrive o en otra unidad. No traduzca ni
+reconstruya el nombre: use la ubicación real de su carpeta, no el ejemplo.
+`C:\Descargas` y `C:\Downloads` son formatos válidos, pero solo funcionarán si
+esas carpetas existen exactamente en la raíz de C:. Configurarlas no las crea.
+No introduzca `%USERPROFILE%` ni otros marcadores: el campo espera la ruta
+absoluta ya resuelta. Si qBittorrent corre en otro equipo, use una ruta de ese
+equipo, no la del Explorador local.
 
 La carpeta donde selecciona los `.torrent` pertenece al ordenador de la
 aplicación. El destino de descarga pertenece al entorno de qBittorrent. En un
