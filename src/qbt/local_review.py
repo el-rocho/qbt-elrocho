@@ -11,11 +11,11 @@ from PySide6.QtWidgets import (
 
 from .catalog import Catalog, CatalogError, LocalRecord
 from .classification import classify
+from .destinations import candidate_destinations, propose_destination
 from .torrent import TorrentError, read_torrent
 from .review import find_matches
 
-KINDS = ("Sin determinar", "Película", "Serie", "Libro")
-KIND_PATHS = {"Película": "peliculas", "Serie": "series", "Libro": "libros"}
+KINDS = ("Sin determinar", "Película", "Serie", "Libro", "Otros")
 
 
 def _valid_destination(value: str) -> bool:
@@ -25,9 +25,10 @@ def _valid_destination(value: str) -> bool:
 
 
 class LocalReviewPanel(QGroupBox):
-    def __init__(self, settings, roots, catalog_path=None) -> None:
+    def __init__(self, settings, directories, dir_cache, catalog_path=None) -> None:
         super().__init__("Revisión local — catálogo y destinos (sin envío)")
-        self._roots = roots
+        self._directories = directories
+        self._dir_cache = dir_cache
         self._rendering = False
         self._last_save_error: str | None = None
         self._records: list[LocalRecord] = []
@@ -115,16 +116,13 @@ class LocalReviewPanel(QGroupBox):
         self.import_files(files)
 
     def _destination_options(self, kind: str) -> list[str]:
-        options = [self._roots().get(KIND_PATHS.get(kind, ""), ""),
-                   *[r.destination for r in self._records if r.kind == kind and r.destination]]
-        return list(dict.fromkeys(option for option in options if option and _valid_destination(option)))
+        options = candidate_destinations(kind, self._directories(), self._records)
+        return [option for option in options if _valid_destination(option)]
 
-    def _proposed_destination(self, kind: str) -> str:
-        options = self._destination_options(kind)
-        if kind == "Serie" and len(options) > 1:
-            return ""  # Varias raíces: no decidir por el usuario dónde conservar la serie.
-        proposed = self._roots().get(KIND_PATHS.get(kind, ""), "")
-        return proposed if _valid_destination(proposed) else ""
+    def _proposed_destination(self, kind: str, title: str) -> str:
+        return propose_destination(
+            kind, title, self._directories(), self._records, self._dir_cache()
+        )
 
     def import_files(self, files: list[str]) -> None:
         if self._catalog is None:
@@ -154,7 +152,7 @@ class LocalReviewPanel(QGroupBox):
                     continue  # Reimportar la misma identidad conserva las correcciones.
                 proposal = classify(source)
                 v1, v2, error = identity.info_hash_v1, identity.info_hash_v2, ""
-            destination = self._proposed_destination(proposal.kind)
+            destination = self._proposed_destination(proposal.kind, proposal.title)
             record = LocalRecord(source, v1, v2, proposal.kind, proposal.title,
                                  proposal.season, proposal.quality, proposal.confidence,
                                  destination, not error and previous is None, error)
@@ -268,9 +266,14 @@ class LocalReviewPanel(QGroupBox):
                 return
         if "kind" in changes:
             changes["confidence"] = "manual"
-            old_default = self._roots().get(KIND_PATHS.get(record.kind, ""), "")
-            if not record.destination or record.destination == old_default:
-                changes["destination"] = self._proposed_destination(changes["kind"])
+            prior = [record for record in self._records if record.source != source]
+            old_proposal = propose_destination(
+                record.kind, record.title, self._directories(), prior, self._dir_cache()
+            )
+            if not record.destination or record.destination == old_proposal:
+                changes["destination"] = propose_destination(
+                    changes["kind"], record.title, self._directories(), prior, self._dir_cache()
+                )
         self._save(replace(record, **changes))
         self._render()
 

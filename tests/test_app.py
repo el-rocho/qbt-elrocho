@@ -29,6 +29,7 @@ from qbt.app import (
     ORGANIZATION,
     MainWindow,
 )
+from qbt.config import AppConfig, DirectoryConfig
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -99,6 +100,10 @@ def settings_file(root: str) -> str:
     return os.path.join(root, ORGANIZATION, f"{APPLICATION}.ini")
 
 
+def config_file(root: str) -> str:
+    return os.path.join(root, ORGANIZATION, f"{APPLICATION}.json")
+
+
 def read_text(path: str) -> str:
     with open(path, encoding="utf-8") as handle:
         return handle.read()
@@ -108,7 +113,7 @@ def window_tables(window: MainWindow) -> dict[str, object]:
     return {
         "local": window.local_table,
         "torrents": window.torrents_table,
-        "directory": window.directory_table,
+        "directory": next(iter(window.directory_tables.values()), None),
     }
 
 
@@ -174,7 +179,7 @@ _WRITE_WIDTHS_SCRIPT = textwrap.dedent(
     app = QApplication([])
     window = MainWindow()
     tables = {"local": window.local_table, "torrents": window.torrents_table,
-              "directory": window.directory_table}
+              "directory": next(iter(window.directory_tables.values()))}
     for name, values in widths.items():
         for column, value in enumerate(values):
             tables[name].setColumnWidth(column, value)
@@ -195,7 +200,7 @@ _READ_WIDTHS_SCRIPT = textwrap.dedent(
     app = QApplication([])
     window = MainWindow()
     tables = {"local": window.local_table, "torrents": window.torrents_table,
-              "directory": window.directory_table}
+              "directory": next(iter(window.directory_tables.values()))}
     print(json.dumps({name: [t.horizontalHeader().sectionSize(i)
                              for i in range(t.columnCount())]
                       for name, t in tables.items()}))
@@ -226,6 +231,13 @@ class MainWindowTests(unittest.TestCase):
         with self.server.lock:
             self.server.routes = {}
             self.server.requests = []
+        # Los diálogos modales se simulan: evitan bloquear las pruebas offscreen.
+        self._warning_patch = mock.patch("qbt.app.QMessageBox.warning")
+        self._info_patch = mock.patch("qbt.app.QMessageBox.information")
+        self.warning_mock = self._warning_patch.start()
+        self.info_mock = self._info_patch.start()
+        self.addCleanup(self._warning_patch.stop)
+        self.addCleanup(self._info_patch.stop)
         # Preferencias aisladas: nunca se toca ~/.config/el-rocho real.
         self.prefs = tempfile.TemporaryDirectory()
         self.addCleanup(self.prefs.cleanup)
@@ -256,6 +268,18 @@ class MainWindowTests(unittest.TestCase):
         with self.server.lock:
             return list(self.server.requests)
 
+    def dir_route(self, path):
+        return "/api/v2/app/getDirectoryContent?" + urlencode(
+            {"dirPath": path, "withMetadata": "true"}
+        )
+
+    def set_directories(self, directories):
+        self.window._app_config = AppConfig(
+            base_url=self.window._app_config.base_url, directories=tuple(directories)
+        )
+        self.window._rebuild_directory_tabs()
+        self.window._restore_column_widths()
+
     TORRENTS_PATH = "/api/v2/torrents/info?includeFiles=false"
     TORRENTS_BODY = json.dumps([
         {"hash": "a", "name": "Pelicula A", "state": "downloading", "progress": 0.5,
@@ -278,7 +302,8 @@ class MainWindowTests(unittest.TestCase):
                                    "Destino", "Incluir", "Avisos"])
         self.assertNotEqual(self.window.local_table.editTriggers(), QAbstractItemView.NoEditTriggers)
         self.assertEqual(self.window.torrents_table.editTriggers(), QAbstractItemView.NoEditTriggers)
-        self.assertEqual(self.window.directory_table.editTriggers(), QAbstractItemView.NoEditTriggers)
+        self.assertEqual(next(iter(self.window.directory_tables.values())).editTriggers(),
+                         QAbstractItemView.NoEditTriggers)
 
     def test_previous_five_local_column_widths_are_preserved_when_adding_review_columns(self):
         settings = _MemorySettings()
@@ -316,7 +341,7 @@ class MainWindowTests(unittest.TestCase):
     def test_all_tables_allow_manual_column_widths(self):
         for tab, table in ((0, self.window.local_table),
                            (0, self.window.torrents_table),
-                           (1, self.window.directory_table)):
+                           (1, next(iter(self.window.directory_tables.values())))):
             with self.subTest(table=table):
                 self.window.remote_tabs.setCurrentIndex(tab)
                 QApplication.processEvents()
@@ -335,7 +360,9 @@ class MainWindowTests(unittest.TestCase):
                 widths = [header.sectionSize(i) for i in range(table.columnCount())]
                 self.window.resize(self.window.width() + 30, self.window.height())
                 self.window._fill_torrents(json.loads(self.TORRENTS_BODY))
-                self.window._fill_directory([{"name": "DEMO", "type": "dir"}])
+                self.window._fill_directory(
+                    next(iter(self.window.directory_tables)), [{"name": "DEMO", "type": "dir"}]
+                )
                 QApplication.processEvents()
                 self.assertEqual([header.sectionSize(i) for i in range(table.columnCount())], widths)
 
@@ -344,10 +371,11 @@ class MainWindowTests(unittest.TestCase):
         try:
             QTest.qWait(120)
             self.assertEqual(self.requests(), [])
-            self.assertEqual(window.url_edit.text(), DEFAULT_URL)
+            # La URL persistida en setUp se restaura al abrir una ventana nueva.
+            self.assertEqual(window.url_edit.text(), self.base_url)
             self.assertEqual(
-                tuple(window.path_edits[key].text() for key in ("peliculas", "series", "libros")),
-                DEFAULT_PATHS,
+                [directory.path for directory in window._app_config.directories],
+                list(DEFAULT_PATHS),
             )
             self.assertEqual(window.local_table.columnCount(), 8)
             self.assertEqual(window.local_table.rowCount(), 0)
@@ -369,15 +397,17 @@ class MainWindowTests(unittest.TestCase):
         ):
             self.assertTrue(torrents_page.isAncestorOf(widget))
         for widget in (
-            self.window.directory_table,
+            self.window.directory_config_button,
             self.window.directory_button,
-            self.window.directory_combo,
             self.window.directory_status_label,
-            *self.window.path_edits.values(),
+            self.window.directory_tabs,
         ):
             self.assertTrue(directory_page.isAncestorOf(widget))
+        # Una pestaña por cada directorio configurado (sembrado por defecto).
+        self.assertEqual(self.window.directory_tabs.count(), 3)
+        self.assertEqual(self.window.directory_tabs.tabText(0), DEFAULT_PATHS[0])
         # Ninguna tabla ni etiqueta se comparte entre pestañas.
-        self.assertFalse(torrents_page.isAncestorOf(self.window.directory_table))
+        self.assertFalse(torrents_page.isAncestorOf(self.window.directory_tabs))
         self.assertFalse(torrents_page.isAncestorOf(self.window.directory_status_label))
         self.assertFalse(directory_page.isAncestorOf(self.window.torrents_table))
         self.assertFalse(directory_page.isAncestorOf(self.window.torrents_status_label))
@@ -426,31 +456,31 @@ class MainWindowTests(unittest.TestCase):
         self.assertEqual(self.window.directory_status_label.text(), directory_before)
         self.assertNotIn("403", self.window.directory_status_label.text())
 
-    def test_directory_messages_stay_in_directory_tab_when_user_switches_tab(self):
-        path = "/mnt/descargas/series"
-        encoded = "/api/v2/app/getDirectoryContent?" + urlencode(
-            {"dirPath": path, "withMetadata": "true"}
-        )
-        self.route(encoded, json.dumps([{"name": "Serie", "type": "dir"}]))
-        self.window.path_edits["series"].setText(path)
-        self.window.directory_combo.setCurrentIndex(1)
-        torrents_before = self.window.torrents_status_label.text()
-        self.window.remote_tabs.setCurrentIndex(0)
-        self.window.query_directory()
-        self.assertIn("Consultando el nivel inmediato", self.window.directory_status_label.text())
+    def test_directory_batch_queries_all_configured_directories(self):
+        paths = ("/mnt/a", "/mnt/b")
+        self.set_directories([
+            DirectoryConfig(paths[0], "Película"), DirectoryConfig(paths[1], "Serie")
+        ])
+        for path in paths:
+            self.route(
+                self.dir_route(path),
+                json.dumps([{"name": f"entrada-{path}", "type": "file", "size": 1}]),
+            )
+        self.window.query_directories()
         self.assertTrue(wait_until(lambda: not self.window.busy))
-        self.assertIn("1 entrada", self.window.directory_status_label.text())
-        self.assertEqual(self.window.torrents_status_label.text(), torrents_before)
-        self.assertEqual(self.window.remote_tabs.currentIndex(), 0)
+        self.assertEqual(
+            sorted(r["path"] for r in self.requests()),
+            sorted(self.dir_route(path) for path in paths),
+        )
+        for path in paths:
+            table = self.window.directory_tables[path]
+            self.assertEqual(table.rowCount(), 1)
+            self.assertEqual(table.item(0, 0).text(), f"entrada-{path}")
 
-    def test_directory_path_validation_error_is_reported_in_directory_tab(self):
-        self.window.path_edits["peliculas"].setText("relativa/sin/barra")
-        self.window.directory_combo.setCurrentIndex(0)
-        self.window.remote_tabs.setCurrentIndex(0)
-        self.window.query_directory()
-        self.assertIn("absoluta", self.window.directory_status_label.text())
-        self.assertEqual(self.window.connection_label.text(), IDLE_CONNECTION_TEXT)
-        self.assertEqual(self.window.torrents_status_label.text(), IDLE_TORRENTS_TEXT)
+    def test_directory_query_with_no_directories_reports_error(self):
+        self.set_directories([])
+        self.window.query_directories()
+        self.assertIn("No hay directorios", self.window.directory_status_label.text())
         self.assertEqual(self.requests(), [])
 
     def test_cancellation_messages_stay_in_origin_tab_after_switching_tab(self):
@@ -466,54 +496,47 @@ class MainWindowTests(unittest.TestCase):
         self.assertIn("cancelada", self.window.torrents_status_label.text().lower())
         self.assertEqual(self.window.directory_status_label.text(), directory_before)
 
-    def test_directory_cancellation_is_reported_in_directory_tab(self):
-        path = "/mnt/descargas/peliculas"
-        encoded = "/api/v2/app/getDirectoryContent?" + urlencode(
-            {"dirPath": path, "withMetadata": "true"}
-        )
-        self.route(encoded, json.dumps([{"name": "x", "type": "dir"}]), delay=0.4)
-        torrents_before = self.window.torrents_status_label.text()
-        self.window.remote_tabs.setCurrentIndex(1)
-        self.window.query_directory()
+    def test_directory_batch_cancellation_stops_remaining_directories(self):
+        paths = ("/mnt/a", "/mnt/b")
+        self.set_directories([
+            DirectoryConfig(paths[0], "Película"), DirectoryConfig(paths[1], "Serie")
+        ])
+        self.route(self.dir_route(paths[0]), json.dumps([]), delay=0.4)
+        self.route(self.dir_route(paths[1]), json.dumps([]))
+        self.window.query_directories()
         self.assertTrue(wait_until(lambda: len(self.requests()) >= 1))
-        self.window.remote_tabs.setCurrentIndex(0)
         self.window.cancel_query()
         self.assertIn("cancel", self.window.directory_status_label.text().lower())
         self.assertTrue(wait_until(lambda: not self.window.busy))
-        self.assertIn("cancelada", self.window.directory_status_label.text().lower())
-        self.assertEqual(self.window.torrents_status_label.text(), torrents_before)
-        self.assertEqual(self.window.directory_table.rowCount(), 0)
+        # Solo se consultó el primer directorio; el lote se detuvo.
+        self.assertEqual([r["path"] for r in self.requests()], [self.dir_route(paths[0])])
+        self.assertEqual(self.window.directory_tables[paths[0]].rowCount(), 0)
+        self.assertEqual(self.window.directory_tables[paths[1]].rowCount(), 0)
 
-    def test_directory_failure_is_reported_in_directory_tab_after_switching_tab(self):
-        path = "/mnt/descargas/libros"
-        encoded = "/api/v2/app/getDirectoryContent?" + urlencode(
-            {"dirPath": path, "withMetadata": "true"}
-        )
-        self.route(encoded, b"", status=500)
-        torrents_before = self.window.torrents_status_label.text()
-        self.window.path_edits["libros"].setText(path)
-        self.window.directory_combo.setCurrentIndex(2)
-        self.window.remote_tabs.setCurrentIndex(1)
-        self.window.query_directory()
-        self.window.remote_tabs.setCurrentIndex(0)
+    def test_directory_failure_keeps_previous_rows(self):
+        path = "/mnt/a"
+        self.set_directories([DirectoryConfig(path, "Película")])
+        self.route(self.dir_route(path), json.dumps([{"name": "Carpeta", "type": "dir"}]))
+        self.window.query_directories()
         self.assertTrue(wait_until(lambda: not self.window.busy))
-        self.assertIn("500", self.window.directory_status_label.text())
-        self.assertEqual(self.window.torrents_status_label.text(), torrents_before)
-        self.assertEqual(self.window.torrents_table.rowCount(), 0)
+        self.assertEqual(self.window.directory_tables[path].rowCount(), 1)
+        self.route(self.dir_route(path), b"", status=500)
+        self.window.query_directories()
+        self.assertTrue(wait_until(lambda: not self.window.busy))
+        self.assertIn("Se mantienen", self.window.directory_status_label.text())
+        self.assertEqual(self.window.directory_tables[path].rowCount(), 1)
 
     def test_failure_only_mentions_kept_rows_of_its_own_tab(self):
-        directory_path = "/mnt/descargas/peliculas"
-        encoded = "/api/v2/app/getDirectoryContent?" + urlencode(
-            {"dirPath": directory_path, "withMetadata": "true"}
-        )
+        directory_path = "/mnt/a"
+        self.set_directories([DirectoryConfig(directory_path, "Película")])
         self.route(self.TORRENTS_PATH, self.TORRENTS_BODY)
-        self.route(encoded, json.dumps([{"name": "Carpeta", "type": "dir"}]))
+        self.route(self.dir_route(directory_path), json.dumps([{"name": "Carpeta", "type": "dir"}]))
         self.window.query_torrents()
         self.assertTrue(wait_until(lambda: not self.window.busy))
-        self.window.query_directory()
+        self.window.query_directories()
         self.assertTrue(wait_until(lambda: not self.window.busy))
         self.assertEqual(self.window.torrents_table.rowCount(), 2)
-        self.assertEqual(self.window.directory_table.rowCount(), 1)
+        self.assertEqual(self.window.directory_tables[directory_path].rowCount(), 1)
 
         # Falla torrents: conserva sus filas y no toca la otra pestaña.
         self.route(self.TORRENTS_PATH, b"", status=403)
@@ -522,21 +545,93 @@ class MainWindowTests(unittest.TestCase):
         self.assertTrue(wait_until(lambda: not self.window.busy))
         self.assertIn("Se mantienen", self.window.torrents_status_label.text())
         self.assertEqual(self.window.directory_status_label.text(), directory_label_before)
-        self.assertEqual(self.window.directory_table.rowCount(), 1)
+        self.assertEqual(self.window.directory_tables[directory_path].rowCount(), 1)
         self.assertEqual(self.window.torrents_table.rowCount(), 2)
 
-        # Falla el directorio: no hay filas propias previas que conservar,
-        # así que no debe afirmarlo ni alterar la tabla de torrents.
+        # Falla el directorio: no hay filas propias previas que conservar.
         torrents_label_before = self.window.torrents_status_label.text()
-        self.window.directory_table.setRowCount(0)
-        self.route(encoded, b"", status=500)
-        self.window.query_directory()
+        self.window.directory_tables[directory_path].setRowCount(0)
+        self.route(self.dir_route(directory_path), b"", status=500)
+        self.window.query_directories()
         self.assertTrue(wait_until(lambda: not self.window.busy))
         self.assertNotIn("Se mantienen", self.window.directory_status_label.text())
         self.assertIn("500", self.window.directory_status_label.text())
         self.assertEqual(self.window.torrents_status_label.text(), torrents_label_before)
         self.assertEqual(self.window.torrents_table.rowCount(), 2)
-        self.assertEqual(self.window.directory_table.rowCount(), 0)
+        self.assertEqual(self.window.directory_tables[directory_path].rowCount(), 0)
+
+    def test_directory_batch_messages_stay_in_directory_tab_when_switching(self):
+        path = "/mnt/a"
+        self.set_directories([DirectoryConfig(path, "Película")])
+        self.route(self.dir_route(path), json.dumps([{"name": "Serie", "type": "dir"}]), delay=0.2)
+        torrents_before = self.window.torrents_status_label.text()
+        self.window.remote_tabs.setCurrentIndex(0)
+        self.window.query_directories()
+        self.assertIn("Consultando", self.window.directory_status_label.text())
+        self.assertTrue(wait_until(lambda: not self.window.busy))
+        self.assertIn("1 entrada", self.window.directory_status_label.text())
+        self.assertEqual(self.window.torrents_status_label.text(), torrents_before)
+        self.assertEqual(self.window.remote_tabs.currentIndex(), 0)
+
+    def test_directory_config_dialog_validates_and_returns_directories(self):
+        from qbt.directory_dialog import DirectoryConfigDialog
+        dialog = DirectoryConfigDialog([DirectoryConfig("/mnt/a", "Película")], self.window)
+        self.assertEqual(dialog.table.rowCount(), 1)
+        dialog._accept()
+        self.assertEqual(dialog.directories(), [DirectoryConfig("/mnt/a", "Película")])
+
+    def test_directory_config_dialog_rejects_invalid_path(self):
+        from qbt.directory_dialog import DirectoryConfigDialog
+        dialog = DirectoryConfigDialog([DirectoryConfig("relativa", "Película")], self.window)
+        with mock.patch("qbt.directory_dialog.QMessageBox.warning") as warning:
+            dialog._accept()
+        self.assertIsNone(dialog.directories())
+        self.assertEqual(warning.call_count, 1)
+
+    # --- consulta inicial y avisos agregados ---------------------------
+
+    def test_startup_query_populates_torrents_and_directories(self):
+        path = "/mnt/a"
+        self.set_directories([DirectoryConfig(path, "Película")])
+        self.route(self.TORRENTS_PATH, self.TORRENTS_BODY)
+        self.route(self.dir_route(path), json.dumps([{"name": "Carpeta", "type": "dir"}]))
+        self.window.startup_query()
+        self.assertTrue(wait_until(lambda: not self.window.busy))
+        self.assertEqual(self.window.torrents_table.rowCount(), 2)
+        self.assertEqual(self.window.directory_tables[path].rowCount(), 1)
+        self.info_mock.assert_called_once()
+
+    def test_startup_with_invalid_url_skips_query(self):
+        self.window.url_edit.setText("ftp://servidor")
+        self.window.startup_query()
+        self.assertFalse(self.window.busy)
+        self.assertEqual(self.requests(), [])
+
+    def test_manual_torrents_failure_shows_modal(self):
+        self.route(self.TORRENTS_PATH, b"", status=403)
+        self.window.query_torrents()
+        self.assertTrue(wait_until(lambda: not self.window.busy))
+        self.warning_mock.assert_called_once()
+        self.assertIn("403", self.warning_mock.call_args.args[2])
+
+    def test_manual_torrents_success_does_not_show_modal(self):
+        self.route(self.TORRENTS_PATH, self.TORRENTS_BODY)
+        self.window.query_torrents()
+        self.assertTrue(wait_until(lambda: not self.window.busy))
+        self.warning_mock.assert_not_called()
+        self.info_mock.assert_not_called()
+
+    def test_batch_failure_shows_aggregated_single_dialog(self):
+        paths = ("/mnt/a", "/mnt/b")
+        self.set_directories([
+            DirectoryConfig(paths[0], "Película"), DirectoryConfig(paths[1], "Serie")
+        ])
+        self.route(self.dir_route(paths[0]), b"", status=500)
+        self.route(self.dir_route(paths[1]), b"", status=500)
+        self.window.query_directories()
+        self.assertTrue(wait_until(lambda: not self.window.busy))
+        self.warning_mock.assert_called_once()
+        self.assertIn("2 consultas afectadas", self.warning_mock.call_args.args[2])
 
     def test_version_query_uses_common_header_and_keeps_both_tables(self):
         self.route(self.TORRENTS_PATH, self.TORRENTS_BODY)
@@ -552,7 +647,7 @@ class MainWindowTests(unittest.TestCase):
         self.assertEqual(self.window.torrents_status_label.text(), torrents_summary)
         self.assertEqual(self.window.directory_status_label.text(), directory_summary)
         self.assertEqual(self.window.torrents_table.rowCount(), 2)
-        self.assertEqual(self.window.directory_table.rowCount(), 0)
+        self.assertEqual(next(iter(self.window.directory_tables.values())).rowCount(), 0)
 
     def test_url_change_resets_tab_messages_and_tables_of_previous_server(self):
         self.route(self.TORRENTS_PATH, self.TORRENTS_BODY)
@@ -561,7 +656,7 @@ class MainWindowTests(unittest.TestCase):
         self.assertIn("2 torrent", self.window.torrents_status_label.text())
         self.window.url_edit.setText("http://127.0.0.1:1")
         self.assertEqual(self.window.torrents_table.rowCount(), 0)
-        self.assertEqual(self.window.directory_table.rowCount(), 0)
+        self.assertEqual(next(iter(self.window.directory_tables.values())).rowCount(), 0)
         self.assertEqual(self.window.torrents_status_label.text(), IDLE_TORRENTS_TEXT)
         self.assertEqual(self.window.directory_status_label.text(), IDLE_DIRECTORY_TEXT)
         self.assertIn("descart", self.window.connection_label.text().lower())
@@ -674,18 +769,16 @@ class MainWindowTests(unittest.TestCase):
         self.assertEqual(len(self.requests()), 2)
         self.assertEqual(self.window.torrents_table.rowCount(), 2)
 
-    def test_directory_query_uses_selected_configurable_path(self):
+    def test_directory_query_uses_configured_path_with_metadata(self):
         path = "/mnt/descargas/series"
+        self.set_directories([DirectoryConfig(path, "Serie")])
         entries = json.dumps([{"name": "Serie", "type": "dir"},
                               {"name": "Capitulo.mkv", "type": "file", "size": 1234}])
-        encoded = "/api/v2/app/getDirectoryContent?dirPath=%2Fmnt%2Fdescargas%2Fseries&withMetadata=true"
-        self.route(encoded, entries)
-        self.window.path_edits["series"].setText(path)
-        self.window.directory_combo.setCurrentIndex(1)
-        self.window.query_directory()
+        self.route(self.dir_route(path), entries)
+        self.window.query_directories()
         self.assertTrue(wait_until(lambda: not self.window.busy))
-        self.assertEqual(self.requests()[0]["path"], encoded)
-        table = self.window.directory_table
+        self.assertEqual(self.requests()[0]["path"], self.dir_route(path))
+        table = self.window.directory_tables[path]
         self.assertEqual(table.rowCount(), 2)
         self.assertEqual(table.item(0, 1).text(), "Carpeta")
         self.assertEqual(table.item(1, 1).text(), "Archivo")
@@ -696,22 +789,23 @@ class MainWindowTests(unittest.TestCase):
 
     def test_directory_entry_limit_is_reported(self):
         path = "/mnt/descargas/peliculas"
+        self.set_directories([DirectoryConfig(path, "Película")])
         entries = json.dumps([{"name": f"f{i}", "type": "file", "size": 1} for i in range(2001)])
-        self.route("/api/v2/app/getDirectoryContent?dirPath=%2Fmnt%2Fdescargas%2Fpeliculas&withMetadata=true",
-                   entries)
-        self.window.query_directory()
+        self.route(self.dir_route(path), entries)
+        self.window.query_directories()
         self.assertTrue(wait_until(lambda: not self.window.busy))
         self.assertIn("límite", self.window.directory_status_label.text().lower())
-        self.assertEqual(self.window.directory_table.rowCount(), 0)
+        self.assertEqual(self.window.directory_tables[path].rowCount(), 0)
 
     def test_version_error_does_not_claim_directory_rows_as_version_data(self):
-        self.window._fill_directory([{"name": "DEMO", "type": "dir"}])
+        path = next(iter(self.window.directory_tables))
+        self.window._fill_directory(path, [{"name": "DEMO", "type": "dir"}])
         self.route("/api/v2/app/version", b"", status=403)
         self.window.query_version()
         self.assertTrue(wait_until(lambda: not self.window.busy))
         self.assertIn("403", self.window.connection_label.text())
         self.assertNotIn("Se mantienen", self.window.connection_label.text())
-        self.assertEqual(self.window.directory_table.rowCount(), 1)
+        self.assertEqual(self.window.directory_tables[path].rowCount(), 1)
 
     def test_invalid_url_is_rejected_without_request(self):
         self.window.url_edit.setText("ftp://servidor")
@@ -740,15 +834,11 @@ class MainWindowTests(unittest.TestCase):
                 self.assertIn("URL", self.window.connection_label.text())
                 self.assertEqual(self.requests(), [])
 
-    def test_tab_labels_render_remote_paths_as_plain_text(self):
+    def test_directory_status_renders_paths_as_plain_text(self):
         path = "/mnt/descargas/<b>series</b>"
-        encoded = "/api/v2/app/getDirectoryContent?" + urlencode(
-            {"dirPath": path, "withMetadata": "true"}
-        )
-        self.route(encoded, json.dumps([{"name": "Serie", "type": "dir"}]))
-        self.window.path_edits["series"].setText(path)
-        self.window.directory_combo.setCurrentIndex(1)
-        self.window.query_directory()
+        self.set_directories([DirectoryConfig(path, "Serie")])
+        self.route(self.dir_route(path), json.dumps([{"name": "Serie", "type": "dir"}]))
+        self.window.query_directories()
         self.assertTrue(wait_until(lambda: not self.window.busy))
         self.assertEqual(
             self.window.directory_status_label.textFormat(), Qt.TextFormat.PlainText
@@ -756,20 +846,19 @@ class MainWindowTests(unittest.TestCase):
         self.assertIn("<b>series</b>", self.window.directory_status_label.text())
 
     def test_url_change_discards_previous_results(self):
+        path = "/mnt/descargas/peliculas"
+        self.set_directories([DirectoryConfig(path, "Película")])
         self.route(self.TORRENTS_PATH, self.TORRENTS_BODY)
-        self.route(
-            "/api/v2/app/getDirectoryContent?dirPath=%2Fmnt%2Fdescargas%2Fpeliculas&withMetadata=true",
-            json.dumps([{"name": "Carpeta", "type": "dir"}]),
-        )
+        self.route(self.dir_route(path), json.dumps([{"name": "Carpeta", "type": "dir"}]))
         self.window.query_torrents()
         self.assertTrue(wait_until(lambda: not self.window.busy))
-        self.window.query_directory()
+        self.window.query_directories()
         self.assertTrue(wait_until(lambda: not self.window.busy))
         self.assertEqual(self.window.torrents_table.rowCount(), 2)
-        self.assertEqual(self.window.directory_table.rowCount(), 1)
+        self.assertEqual(self.window.directory_tables[path].rowCount(), 1)
         self.window.url_edit.setText("http://127.0.0.1:1")
         self.assertEqual(self.window.torrents_table.rowCount(), 0)
-        self.assertEqual(self.window.directory_table.rowCount(), 0)
+        self.assertEqual(self.window.directory_tables[path].rowCount(), 0)
         self.assertIn("descart", self.window.connection_label.text().lower())
 
     def test_close_while_worker_active_defers_without_blocking(self):
@@ -820,6 +909,66 @@ class MainWindowTests(unittest.TestCase):
         finally:
             window.deleteLater()
             QApplication.processEvents()
+
+    # --- persistencia de la URL ----------------------------------------
+
+    def test_url_is_persisted_on_edit_and_restored_by_new_window(self):
+        self.window.url_edit.setText("http://10.0.0.99:9090")
+        reopened = MainWindow()
+        try:
+            self.assertEqual(reopened.url_edit.text(), "http://10.0.0.99:9090")
+        finally:
+            reopened.close()
+            reopened.deleteLater()
+            QApplication.processEvents()
+
+    def test_invalid_url_is_not_persisted(self):
+        # setUp guardó self.base_url; la URL inválida no debe sobrescribirla.
+        self.window.url_edit.setText("ftp://servidor")
+        reopened = MainWindow()
+        try:
+            self.assertEqual(reopened.url_edit.text(), self.base_url)
+        finally:
+            reopened.close()
+            reopened.deleteLater()
+            QApplication.processEvents()
+
+    def test_startup_without_config_uses_default_url(self):
+        root = tempfile.mkdtemp(dir=self.prefs.name)
+        QSettings.setPath(QSettings.Format.IniFormat, QSettings.Scope.UserScope, root)
+        window = MainWindow()
+        try:
+            self.assertEqual(window.url_edit.text(), DEFAULT_URL)
+        finally:
+            window.close()
+            window.deleteLater()
+            QApplication.processEvents()
+
+    def test_invalid_stored_url_falls_back_to_default(self):
+        root = tempfile.mkdtemp(dir=self.prefs.name)
+        QSettings.setPath(QSettings.Format.IniFormat, QSettings.Scope.UserScope, root)
+        path = config_file(root)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w", encoding="utf-8") as handle:
+            json.dump(
+                {"version": 1, "base_url": "ftp://servidor", "directories": []}, handle
+            )
+        window = MainWindow()
+        try:
+            self.assertEqual(window.url_edit.text(), DEFAULT_URL)
+        finally:
+            window.close()
+            window.deleteLater()
+            QApplication.processEvents()
+
+    def test_url_is_saved_to_json_not_ini(self):
+        self.window.url_edit.setText(self.base_url)
+        ini_path = settings_file(self.prefs.name)
+        ini_text = read_text(ini_path) if os.path.isfile(ini_path) else ""
+        self.assertNotIn(self.base_url, ini_text)
+        json_path = config_file(self.prefs.name)
+        self.assertTrue(os.path.isfile(json_path))
+        self.assertIn(self.base_url, read_text(json_path))
 
     # --- persistencia de anchos de columna ------------------------------
 
@@ -1018,7 +1167,6 @@ class MainWindowTests(unittest.TestCase):
 
     def test_only_column_widths_are_persisted(self):
         self.route(self.TORRENTS_PATH, self.TORRENTS_BODY)
-        self.window.path_edits["series"].setText("/mnt/privado/series")
         self.window.url_edit.setText(self.base_url)
         self.window.query_torrents()
         self.assertTrue(wait_until(lambda: not self.window.busy))

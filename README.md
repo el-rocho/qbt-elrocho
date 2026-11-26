@@ -6,9 +6,10 @@ qBittorrent, con revisión y aprobación previas.
 
 **Estado: prototipo en desarrollo.** La interfaz mantiene la revisión local de
 `.torrent` y añade consultas de solo lectura a la Web API: versión, lista de
-torrents y contenido del nivel inmediato de un directorio. Conserva en SQLite
-la revisión local, sus correcciones y destinos elegidos. No hay vigilancia,
-envío ni escritura remota; las consultas del servidor siguen siendo temporales.
+torrents y contenido del nivel inmediato de los directorios configurados.
+Conserva en SQLite la revisión local, sus correcciones y destinos elegidos, y en
+un JSON aparte la URL y los directorios de descarga. No hay vigilancia, envío ni
+escritura remota; las consultas del servidor siguen siendo temporales.
 
 No se envía ningún torrent en esta etapa. Antes de habilitar conexiones de
 escritura se mantendrá la revisión y aprobación explícita por lote.
@@ -42,15 +43,20 @@ a la cabecera de conexión; Revisión local conserva su estilo.
 - **Cabecera común de qBittorrent:** URL editable solo cuando no hay trabajo
   (por defecto `http://10.0.4.56:8080`), botón «Consultar versión» y botón
   «Cancelar consulta». Los mensajes de «Consultar versión» aparecen en la
-  etiqueta común bajo la URL.
+  etiqueta común bajo la URL. La URL válida se guarda al editarla y se restaura
+  al reabrir.
 - **Pestaña «Torrents»:** botón «Consultar torrents», su etiqueta de estado y
   la tabla de solo lectura con nombre, estado traducido, progreso y destino
-  (`save_path`). La tabla no se puede editar.
-- **Pestaña «Archivos descargados»:** rutas configurables (por defecto
-  `/mnt/descargas/peliculas`, `/mnt/descargas/series` y
-  `/mnt/descargas/libros`), selector de directorio, botón «Consultar
-  directorio» —que pide explícitamente el nivel inmediato, sin recursividad—,
-  su propia etiqueta de estado y la tabla de archivos y carpetas.
+  (`save_path`). La tabla no se puede editar. Al abrir la aplicación se consulta
+  automáticamente; si la conexión falla se muestra un aviso modal (también al
+  pulsar el botón manualmente).
+- **Pestaña «Archivos descargados»:** botón «Configurar directorios», que abre
+  un diálogo para definir y ajustar todas las rutas de descarga y su tipo
+  (Película, Serie, Libro, Otros o «Sin determinar» como comodín). Botón
+  «Consultar directorios», que consulta **todos** los directorios configurados
+  de una vez; cada uno se muestra en su propia pestaña interna con la tabla de
+  archivos y carpetas del nivel inmediato. La lectura **no es recursiva**: solo
+  se lista el nivel inmediato de cada ruta.
 - **Mensajes por pestaña:** cada consulta escribe su estado (ocupado, éxito,
   error, cancelación y validación de ruta) en la etiqueta de la pestaña donde
   se lanzó. El contexto se captura al iniciar la consulta, no al recibir la
@@ -68,8 +74,11 @@ a la cabecera de conexión; Revisión local conserva su estilo.
   `http://[::1`), puertos no numéricos o fuera de 1–65535, credenciales
   embebidas (`usuario:clave@`), query y fragmento. El error se muestra en la
   etiqueta de la consulta que se intentó iniciar y no se envía ninguna petición.
-- **Sin conexión automática:** la ventana no consulta nada al arrancar. No se
-  guardan credenciales ni claves; la URL no se persiste.
+- **Consulta inicial:** al abrir, la aplicación consulta automáticamente los
+  torrents y todos los directorios configurados, mostrando un diálogo modal de
+  progreso mientras se ejecutan las llamadas secuenciales y, al terminar, un
+  único aviso agregado con el resultado (o los errores) de cada consulta. No se
+  guardan credenciales ni claves.
 
 ### Ancho de columnas
 
@@ -82,10 +91,10 @@ cerrar se avisa con un diálogo sin impedir la salida.
 
 En las preferencias INI solo se persisten los anchos, por tabla. En Linux el
 fichero es `~/.config/el-rocho/qbt-elrocho.ini`; en Windows, la ubicación INI de
-QSettings para el usuario. Se conservan los cinco anchos locales de la versión
-anterior y se añaden los de las tres columnas nuevas. La URL, las credenciales
-y las consultas remotas no se guardan en las preferencias. El catálogo local
-SQLite es independiente y sí conserva los destinos de las filas revisadas.
+QSettings para el usuario. La URL y los directorios configurados se guardan
+aparte, en `qbt-elrocho.json` junto al INI. Las credenciales y las consultas
+remotas no se guardan. El catálogo local SQLite es independiente y sí conserva
+los destinos de las filas revisadas.
 
 ### Catálogo, destinos y duplicados
 
@@ -98,14 +107,17 @@ SQLite es independiente y sí conserva los destinos de las filas revisadas.
   clic o F2. La clasificación parte del nombre del archivo y es conservadora:
   no decide que un nombre desconocido sea una película. Los cambios manuales
   quedan identificados como tales.
-- **Destinos por usuario:** las raíces iniciales son las editables en
-  «Archivos descargados». Cada fila permite seleccionar o escribir su destino
-  absoluto; también ofrece los destinos ya guardados del mismo tipo. Las
-  raíces del formulario no se persisten por separado ni alteran las decisiones
-  previas. Películas y libros proponen su raíz, sin crear carpetas por título
-  o autor. Cuando una serie tiene varias alternativas conocidas, no se elige
-  una automáticamente. La aplicación no añade subcarpetas de serie/temporada:
-  la estructura del torrent y la configuración del servidor siguen mandando.
+- **Destinos por usuario:** cada fila permite seleccionar o escribir su destino
+  absoluto; también ofrece los directorios configurados de su tipo y los
+  destinos ya guardados del mismo tipo. Películas y libros proponen su
+  directorio, sin crear carpetas por título o autor. Cuando un tipo tiene
+  varias alternativas conocidas, no se elige una automáticamente; la excepción
+  es que el título ya exista en un destino guardado o, para series, como carpeta
+  en los listados leídos al inicio, en cuyo caso se reutiliza esa ubicación.
+  El tipo «Otros» agrupa lo que no es película, serie ni libro; un directorio
+  «Sin determinar» actúa como respaldo cuando no hay uno del tipo concreto. La
+  aplicación no añade subcarpetas de serie/temporada: la estructura del torrent
+  y la configuración del servidor siguen mandando.
 - **Identidad exacta:** calcula el infohash sobre los bytes originales del
   diccionario `info`: SHA1 en v1, SHA256 en v2 y ambas identidades en híbridos.
   Archivos con distinto nombre pero la misma identidad son duplicados. La
@@ -188,7 +200,10 @@ almacena la revisión local, sin credenciales ni respuestas remotas.
   (deshabilitada, con estado «Cerrando…») hasta que el hilo termina; nunca se
   deja un hilo huérfano ni se fuerza su destrucción.
 - Cada ventana usa su propio `QThreadPool` con un solo hilo; la interfaz no se
-  bloquea y se ignora una segunda consulta mientras hay una activa.
+  bloquea y se ignora una segunda consulta mientras hay una activa. Las
+  consultas de directorio y la consulta inicial se ejecutan en secuencia, una a
+  una, con un diálogo modal de progreso y un único aviso agregado al terminar
+  (los errores idénticos se deduplican).
 - Los mensajes de error no incluyen la clave ni la URL completa.
 
 ## Base tecnológica prevista

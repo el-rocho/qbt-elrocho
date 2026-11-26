@@ -12,6 +12,7 @@ from PySide6.QtTest import QTest
 
 from qbt.app import DEFAULT_PATHS, MainWindow
 from qbt.catalog import CatalogError
+from qbt.config import AppConfig, DirectoryConfig
 from qbt.torrent import read_torrent
 
 
@@ -215,13 +216,32 @@ class LocalReviewTests(unittest.TestCase):
         source = self.root / "DEMO.Serie.S02E01.torrent"
         make_torrent(source)
         window = self.window()
-        window.path_edits["series"].setText("relativa")
+        # Sin raíz de series configurada: no se propone ningún destino.
+        window._app_config = AppConfig(
+            base_url=window._app_config.base_url,
+            directories=(DirectoryConfig("/mnt/descargas/peliculas", "Película"),),
+        )
         window.import_files([str(source)])
         self.assertEqual(window.local_table.cellWidget(0, 5).currentText(), "")
         combo = window.local_table.cellWidget(0, 5)
         combo.setEditText(r"D:\Biblioteca\Series")
         combo.lineEdit().editingFinished.emit()
         self.assertEqual(window.local_table.cellWidget(0, 5).currentText(), r"D:\Biblioteca\Series")
+
+    def test_otros_kind_is_selectable_and_proposes_otros_directory(self):
+        source = self.root / "DEMO.Documental.torrent"
+        make_torrent(source, name="DEMO Documental")
+        window = self.window()
+        window._app_config = AppConfig(
+            base_url=window._app_config.base_url,
+            directories=(DirectoryConfig("/mnt/otros", "Otros"),),
+        )
+        window.import_files([str(source)])
+        kind_combo = window.local_table.cellWidget(0, 1)
+        self.assertIn("Otros", [kind_combo.itemText(i) for i in range(kind_combo.count())])
+        # El torrent se clasifica como «Sin determinar»; al marcarlo «Otros» se propone su raíz.
+        kind_combo.setCurrentText("Otros")
+        self.assertEqual(window.local_table.cellWidget(0, 5).currentText(), "/mnt/otros")
 
     def test_remote_refresh_commits_an_active_local_editor(self):
         source = self.root / "DEMO.Serie.S02E01.torrent"

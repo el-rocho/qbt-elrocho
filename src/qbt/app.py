@@ -2,14 +2,14 @@
 
 import sys
 import threading
+from pathlib import Path
 from urllib.parse import urlsplit
 
-from PySide6.QtCore import QObject, QRunnable, QSettings, Qt, QThreadPool, Signal, Slot
+from PySide6.QtCore import QObject, QRunnable, QSettings, Qt, QThreadPool, QTimer, Signal, Slot
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QApplication,
-    QComboBox,
-    QGridLayout,
+    QDialog,
     QGroupBox,
     QHBoxLayout,
     QHeaderView,
@@ -17,6 +17,7 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QMainWindow,
     QMessageBox,
+    QProgressBar,
     QPushButton,
     QTableWidget,
     QTableWidgetItem,
@@ -25,6 +26,14 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from .config import (
+    AppConfig,
+    ConfigError,
+    DirectoryConfig,
+    load as load_config,
+    save as save_config,
+)
+from .directory_dialog import DirectoryConfigDialog
 from .local_review import LocalReviewPanel
 from .qbittorrent import QBittorrentClient, QBittorrentError
 
@@ -34,8 +43,14 @@ DEFAULT_PATHS = (
     "/mnt/descargas/series",
     "/mnt/descargas/libros",
 )
-PATH_KEYS = ("peliculas", "series", "libros")
-PATH_LABELS = ("Películas", "Series", "Libros")
+DEFAULT_KINDS = ("Película", "Serie", "Libro")
+
+
+def _default_directories() -> tuple[DirectoryConfig, ...]:
+    """Directorios sembrados en la primera ejecución, migrando los valores fijos."""
+    return tuple(
+        DirectoryConfig(path, kind) for path, kind in zip(DEFAULT_PATHS, DEFAULT_KINDS)
+    )
 QUERY_TIMEOUT = 6.0  # inactividad por operación de socket, no plazo total
 # Persistencia de anchos de columna: solo geometría de la interfaz local.
 ORGANIZATION = "el-rocho"
@@ -56,7 +71,8 @@ IDLE_TORRENTS_TEXT = (
     "Sin consultar. Pulse «Consultar torrents» para leer la lista remota (solo lectura)."
 )
 IDLE_DIRECTORY_TEXT = (
-    "Sin consultar. Elija una ruta y pulse «Consultar directorio» para ver el nivel inmediato."
+    "Sin consultar. Pulse «Consultar directorios» para leer el nivel inmediato "
+    "de cada directorio configurado."
 )
 # Contexto de las validaciones locales de la pestaña «Archivos descargados»:
 # se usa el prefijo para enrutar también los errores previos a la consulta.
@@ -186,6 +202,43 @@ class _QueryTask(QRunnable):
             self._signals.finished.emit(self.request_id)
 
 
+class BatchProgressDialog(QDialog):
+    """Diálogo modal de progreso del lote; no bloquea el bucle de eventos."""
+
+    cancelled = Signal()
+
+    def __init__(self, title: str, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setWindowTitle(title)
+        self.setWindowModality(Qt.WindowModality.ApplicationModal)
+        self.setMinimumWidth(400)
+        layout = QVBoxLayout(self)
+        self.label = QLabel("Consultando…")
+        self.label.setWordWrap(True)
+        layout.addWidget(self.label)
+        self.progress = QProgressBar()
+        self.progress.setRange(0, 1)
+        self.progress.setValue(0)
+        layout.addWidget(self.progress)
+        cancel = QPushButton("Cancelar")
+        cancel.clicked.connect(self.cancelled.emit)
+        layout.addWidget(cancel, alignment=Qt.AlignmentFlag.AlignRight)
+
+    def set_range(self, maximum: int) -> None:
+        self.progress.setRange(0, maximum)
+
+    def set_value(self, value: int) -> None:
+        self.progress.setValue(value)
+
+    def set_text(self, text: str) -> None:
+        self.label.setText(text)
+
+    def reject(self) -> None:
+        # Esc o el aspa se interpretan como cancelación cooperativa; el diálogo
+        # permanece hasta que termina la consulta en curso.
+        self.cancelled.emit()
+
+
 def _create_settings() -> QSettings:
     """Preferencias propias en INI dentro del perfil del usuario.
 
@@ -230,6 +283,21 @@ class MainWindow(QMainWindow):
     def __init__(self, settings: QSettings | None = None, catalog_path=None) -> None:
         super().__init__()
         self._settings = settings if settings is not None else _create_settings()
+        self._config_path: Path | None = None
+        self._app_config = AppConfig(directories=_default_directories())
+        if hasattr(self._settings, "fileName"):
+            self._config_path = Path(self._settings.fileName()).with_suffix(".json")
+            if self._config_path.exists():
+                try:
+                    self._app_config = load_config(self._config_path)
+                except ConfigError:
+                    pass  # se conservan los directorios por defecto
+        initial_url = DEFAULT_URL
+        if self._app_config.base_url:
+            try:
+                initial_url = validate_base_url(self._app_config.base_url)
+            except ValueError:
+                initial_url = DEFAULT_URL
         self.setWindowTitle("Gestor qBittorrent — revisión local y consulta remota")
         self.resize(1000, 780)
         self.busy = False
@@ -239,6 +307,12 @@ class MainWindow(QMainWindow):
         self._active_context: str | None = None
         self._request_id = 0
         self._tasks: dict[int, _QueryTask] = {}
+        self._batch = False
+        self._pending: list[tuple] = []
+        self._batch_outcomes: list[tuple] = []
+        self._batch_dialog: BatchProgressDialog | None = None
+        self._batch_total = 0
+        self._directory_cache: dict[str, list[dict]] = {}
         # Grupo propio (no el global) para que la ventana no arrastre trabajos
         # ajenos y para que el cierre no dependa de un waitForDone global.
         self._pool = QThreadPool(self)
@@ -247,7 +321,7 @@ class MainWindow(QMainWindow):
         central = QWidget()
         root = QVBoxLayout(central)
 
-        local_group = LocalReviewPanel(self._settings, self._local_roots, catalog_path)
+        local_group = LocalReviewPanel(self._settings, self._directories, self._dir_cache, catalog_path)
         self.local_group = local_group
         self.local_status_label = local_group.status_label
         self.local_table = local_group.table
@@ -263,7 +337,7 @@ class MainWindow(QMainWindow):
 
         url_row = QHBoxLayout()
         url_row.addWidget(QLabel("URL de la WebUI:"))
-        self.url_edit = QLineEdit(DEFAULT_URL)
+        self.url_edit = QLineEdit(initial_url)
         self.url_edit.setPlaceholderText(DEFAULT_URL)
         self.url_edit.textChanged.connect(self._on_url_changed)
         url_row.addWidget(self.url_edit, 1)
@@ -326,25 +400,14 @@ class MainWindow(QMainWindow):
 
         directory_page = QWidget()
         directory_layout = QVBoxLayout(directory_page)
-        paths_layout = QGridLayout()
-        self.path_edits: dict[str, QLineEdit] = {}
-        for row, (key, label, default) in enumerate(zip(PATH_KEYS, PATH_LABELS, DEFAULT_PATHS)):
-            paths_layout.addWidget(QLabel(label), row, 0)
-            edit = QLineEdit(default)
-            edit.setPlaceholderText(default)
-            edit.textChanged.connect(self._sync_paths)
-            self.path_edits[key] = edit
-            paths_layout.addWidget(edit, row, 1)
-        directory_layout.addLayout(paths_layout)
-
         directory_row = QHBoxLayout()
-        directory_row.addWidget(QLabel("Directorio a consultar:"))
-        self.directory_combo = QComboBox()
-        self.directory_combo.addItems(DEFAULT_PATHS)
-        directory_row.addWidget(self.directory_combo, 1)
-        self.directory_button = QPushButton("Consultar directorio")
-        self.directory_button.clicked.connect(self.query_directory)
+        self.directory_config_button = QPushButton("Configurar directorios")
+        self.directory_config_button.clicked.connect(self._open_directory_config)
+        directory_row.addWidget(self.directory_config_button)
+        self.directory_button = QPushButton("Consultar directorios")
+        self.directory_button.clicked.connect(self.query_directories)
         directory_row.addWidget(self.directory_button)
+        directory_row.addStretch(1)
         directory_layout.addLayout(directory_row)
 
         self.directory_status_label = QLabel(IDLE_DIRECTORY_TEXT)
@@ -352,16 +415,12 @@ class MainWindow(QMainWindow):
         self.directory_status_label.setTextFormat(Qt.TextFormat.PlainText)
         directory_layout.addWidget(self.directory_status_label)
 
-        self.directory_table = QTableWidget(0, 3)
-        self.directory_table.setHorizontalHeaderLabels(["Nombre", "Tipo", "Tamaño"])
-        self.directory_table.horizontalHeader().setStretchLastSection(False)
-        self.directory_table.horizontalHeader().setSectionResizeMode(QHeaderView.Interactive)
-        for column, width in enumerate(DEFAULT_COLUMN_WIDTHS["directory"]):
-            self.directory_table.setColumnWidth(column, width)
-        self.directory_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
-        self.directory_table.setSelectionBehavior(QAbstractItemView.SelectRows)
-        directory_layout.addWidget(self.directory_table, 1)
+        self.directory_tabs = QTabWidget()
+        self.directory_tabs.setObjectName("directoryTabs")
+        self.directory_tables: dict[str, QTableWidget] = {}
+        directory_layout.addWidget(self.directory_tabs, 1)
         self.remote_tabs.addTab(directory_page, "Archivos descargados")
+        self._rebuild_directory_tabs()
 
         root.addWidget(remote_group, 1)
         self.setCentralWidget(central)
@@ -373,24 +432,25 @@ class MainWindow(QMainWindow):
 
     # --- anchos de columna persistidos ----------------------------------
 
-    def _tables(self) -> dict[str, QTableWidget]:
+    def _table_groups(self) -> dict[str, list[QTableWidget]]:
         return {
-            "local": self.local_table,
-            "torrents": self.torrents_table,
-            "directory": self.directory_table,
+            "local": [self.local_table],
+            "torrents": [self.torrents_table],
+            "directory": list(self.directory_tables.values()),
         }
 
     def _restore_column_widths(self) -> None:
         """Aplica los anchos guardados; si faltan o no son válidos, los de fábrica."""
-        for name, table in self._tables().items():
+        for name, tables in self._table_groups().items():
             defaults = DEFAULT_COLUMN_WIDTHS[name]
             raw = self._settings.value(f"{COLUMN_WIDTHS_GROUP}/{name}")
             if name == "local" and isinstance(raw, (list, tuple)) and len(raw) == 5:
                 # Conserva los anchos de la versión anterior y añade solo los nuevos.
                 raw = list(_valid_stored_widths(raw, defaults[:5])) + list(defaults[5:])
             stored = _valid_stored_widths(raw, defaults)
-            for column, width in enumerate(stored):
-                table.setColumnWidth(column, width)
+            for table in tables:
+                for column, width in enumerate(stored):
+                    table.setColumnWidth(column, width)
 
     def _save_column_widths(self) -> bool:
         """Guarda los anchos de las tres tablas y hace visible cualquier fallo.
@@ -400,11 +460,13 @@ class MainWindow(QMainWindow):
         """
         failed = False
         try:
-            for name, table in self._tables().items():
-                header = table.horizontalHeader()
+            for name, tables in self._table_groups().items():
+                if not tables:
+                    continue
+                header = tables[0].horizontalHeader()
                 self._settings.setValue(
                     f"{COLUMN_WIDTHS_GROUP}/{name}",
-                    [header.sectionSize(column) for column in range(table.columnCount())],
+                    [header.sectionSize(column) for column in range(tables[0].columnCount())],
                 )
             # sync() es quien escribe de verdad; el estado se consulta después.
             self._settings.sync()
@@ -424,10 +486,57 @@ class MainWindow(QMainWindow):
 
     # --- revisión local -------------------------------------------------
 
-    def _local_roots(self) -> dict[str, str]:
-        edits = getattr(self, "path_edits", {})
-        return {key: edits[key].text().strip() if key in edits else default
-                for key, default in zip(PATH_KEYS, DEFAULT_PATHS)}
+    def _directories(self) -> list[DirectoryConfig]:
+        return list(self._app_config.directories)
+
+    def _dir_cache(self) -> dict[str, list[dict]]:
+        return self._directory_cache
+
+    def _make_directory_table(self) -> QTableWidget:
+        table = QTableWidget(0, 3)
+        table.setHorizontalHeaderLabels(["Nombre", "Tipo", "Tamaño"])
+        table.horizontalHeader().setStretchLastSection(False)
+        table.horizontalHeader().setSectionResizeMode(QHeaderView.Interactive)
+        for column, width in enumerate(DEFAULT_COLUMN_WIDTHS["directory"]):
+            table.setColumnWidth(column, width)
+        table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        return table
+
+    def _rebuild_directory_tabs(self) -> None:
+        self.directory_tabs.clear()
+        self.directory_tables = {}
+        for directory in self._app_config.directories:
+            table = self._make_directory_table()
+            self.directory_tables[directory.path] = table
+            self.directory_tabs.addTab(table, directory.path)
+        if not self._app_config.directories:
+            self._show_neutral(
+                "No hay directorios configurados. Abra «Configurar directorios».", DIRECTORY_CONTEXT
+            )
+
+    def _open_directory_config(self) -> None:
+        dialog = DirectoryConfigDialog(self._app_config.directories, self)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        directories = dialog.directories() or []
+        self._app_config = AppConfig(
+            base_url=self._app_config.base_url, directories=tuple(directories)
+        )
+        if self._config_path is not None:
+            try:
+                save_config(self._app_config, self._config_path)
+            except ConfigError:
+                QMessageBox.warning(
+                    self,
+                    "Directorios no guardados",
+                    "No se pudieron guardar los directorios; los cambios no se conservarán "
+                    "al cerrar la aplicación.",
+                )
+        self._directory_cache.clear()
+        self._rebuild_directory_tabs()
+        self._restore_column_widths()
+        self.local_group._render()
 
     def add_files(self) -> None:
         self.local_group.choose_files()
@@ -436,13 +545,6 @@ class MainWindow(QMainWindow):
         self.local_group.import_files(files)
 
     # --- consultas remotas ---------------------------------------------
-
-    def _sync_paths(self) -> None:
-        index = max(0, self.directory_combo.currentIndex())
-        for position, key in enumerate(PATH_KEYS):
-            text = self.path_edits[key].text().strip()
-            self.directory_combo.setItemText(position, text or DEFAULT_PATHS[position])
-        self.directory_combo.setCurrentIndex(index)
 
     def _label_for_context(self, context: str) -> QLabel:
         """Etiqueta de origen de la consulta, no la pestaña visible al responder."""
@@ -467,25 +569,46 @@ class MainWindow(QMainWindow):
 
     def _set_busy(self, busy: bool) -> None:
         self.busy = busy
-        for button in (self.version_button, self.torrents_button, self.directory_button):
+        for button in (self.version_button, self.torrents_button, self.directory_button,
+                       self.directory_config_button):
             button.setEnabled(not busy)
         # Tras pedir la cancelación el botón se apaga, pero la ventana sigue
         # ocupada hasta que el hilo termina: nunca hay dos trabajos a la vez.
         self.cancel_button.setEnabled(busy and not self._cancel_requested)
         self.url_edit.setEnabled(not busy)
 
-    def _on_url_changed(self, _text: str) -> None:
+    def _persist_url(self, raw: str) -> bool:
+        """Guarda la URL si es válida; una URL incompleta o inválida no se escribe."""
+        try:
+            normalized = validate_base_url(raw)
+        except ValueError:
+            return False
+        updated = AppConfig(base_url=normalized, directories=self._app_config.directories)
+        if self._config_path is not None:
+            try:
+                save_config(updated, self._config_path)
+            except ConfigError:
+                return False
+        self._app_config = updated
+        return True
+
+    def _on_url_changed(self, text: str) -> None:
         """Cambiar de servidor invalida los datos del anterior."""
         if self._closing:
             return
-        had_rows = bool(self.torrents_table.rowCount() or self.directory_table.rowCount())
+        had_rows = bool(self.torrents_table.rowCount() or any(
+            table.rowCount() for table in self.directory_tables.values()
+        ))
         self.local_group.set_remote_torrents(None)
         self.torrents_table.setRowCount(0)
-        self.directory_table.setRowCount(0)
+        self._directory_cache.clear()
+        for table in self.directory_tables.values():
+            table.setRowCount(0)
         # Las etiquetas de cada pestaña no deben seguir afirmando datos del
         # servidor anterior: vuelven a su texto inicial.
         self._show_neutral(IDLE_TORRENTS_TEXT, "torrents")
         self._show_neutral(IDLE_DIRECTORY_TEXT, DIRECTORY_CONTEXT)
+        self._persist_url(text)
         if self.busy:
             self.cancel_query()
             return
@@ -506,6 +629,10 @@ class MainWindow(QMainWindow):
             self._show_error(str(exc), context)
             return
         client = QBittorrentClient(base_url, timeout=QUERY_TIMEOUT)
+        self._dispatch_query(operation, context, busy_text, client)
+
+    def _dispatch_query(self, operation, context: str, busy_text: str,
+                        client: QBittorrentClient) -> None:
         self._request_id += 1
         request_id = self._request_id
         signals = _QuerySignals()
@@ -535,21 +662,128 @@ class MainWindow(QMainWindow):
             "Consultando torrents (solo lectura)…",
         )
 
-    def query_directory(self) -> None:
-        path = self.directory_combo.currentText().strip()
-        if not path:
-            self._show_error("Indique una ruta de directorio.", DIRECTORY_CONTEXT)
+    def query_directories(self) -> None:
+        if self.busy or self._closing:
             return
-        if not path.startswith("/"):
+        try:
+            validate_base_url(self.url_edit.text())
+        except ValueError as exc:
+            self._show_error(str(exc), DIRECTORY_CONTEXT)
+            return
+        paths = [directory.path for directory in self._app_config.directories]
+        if not paths:
             self._show_error(
-                "La ruta del directorio debe ser absoluta (empezar por /).", DIRECTORY_CONTEXT
+                "No hay directorios configurados. Abra «Configurar directorios».", DIRECTORY_CONTEXT
             )
             return
-        self._start_query(
-            lambda client: client.directory_content(path, with_metadata=True),
-            f"directory:{path}",
-            f"Consultando el nivel inmediato de {path}…",
-        )
+        items = [
+            (f"directory:{path}",
+             (lambda client, path=path: client.directory_content(path, with_metadata=True)),
+             f"Consultando el nivel inmediato de {path}…")
+            for path in paths
+        ]
+        self._run_batch(items, "Consultar directorios")
+
+    def startup_query(self) -> None:
+        """Consulta inicial al abrir la aplicación: torrents + todos los directorios."""
+        if self.busy or self._closing:
+            return
+        try:
+            validate_base_url(self.url_edit.text())
+        except ValueError:
+            return
+        items = [(
+            "torrents",
+            lambda client: client.torrents_info(include_files=False),
+            "Consultando torrents (solo lectura)…",
+        )]
+        for directory in self._app_config.directories:
+            path = directory.path
+            items.append((
+                f"directory:{path}",
+                (lambda client, path=path: client.directory_content(path, with_metadata=True)),
+                f"Consultando el nivel inmediato de {path}…",
+            ))
+        self._run_batch(items, "Consulta inicial")
+
+    def _run_batch(self, items: list[tuple], title: str) -> None:
+        self._batch = True
+        self._pending = list(items)
+        self._batch_outcomes = []
+        self._batch_total = len(items)
+        dialog = BatchProgressDialog(title, self)
+        dialog.set_range(self._batch_total)
+        dialog.cancelled.connect(self.cancel_query)
+        self._batch_dialog = dialog
+        dialog.show()
+        self._start_next_batch_query()
+
+    def _start_next_batch_query(self) -> None:
+        if not self._pending:
+            self._finish_batch()
+            return
+        context, operation, busy_text = self._pending[0]
+        self._pending = self._pending[1:]
+        try:
+            base_url = validate_base_url(self.url_edit.text())
+        except ValueError as exc:
+            self._record_batch_outcome(False, context, str(exc))
+            self._pending = []
+            self._finish_batch()
+            return
+        client = QBittorrentClient(base_url, timeout=QUERY_TIMEOUT)
+        if self._batch_dialog is not None:
+            self._batch_dialog.set_text(busy_text)
+        self._dispatch_query(operation, context, busy_text, client)
+
+    def _record_batch_outcome(self, ok: bool, context: str, text: str) -> None:
+        if self._batch:
+            self._batch_outcomes.append((ok, context, text))
+
+    def _batch_item_label(self, context: str) -> str:
+        if context == "torrents":
+            return "Torrents"
+        if context.startswith("directory:"):
+            return f"Directorio {context.split(':', 1)[1]}"
+        return context
+
+    def _aggregate_batch_outcomes(self, outcomes: list[tuple]) -> list[str]:
+        ok_lines = []
+        error_contexts: dict[str, list[str]] = {}
+        for ok, context, text in outcomes:
+            if ok:
+                ok_lines.append(f"{self._batch_item_label(context)}: {text}")
+            else:
+                error_contexts.setdefault(text, []).append(context)
+        error_lines = []
+        for text, contexts in error_contexts.items():
+            if len(contexts) == 1:
+                error_lines.append(f"{self._batch_item_label(contexts[0])}: {text}")
+            else:
+                error_lines.append(f"{text} ({len(contexts)} consultas afectadas)")
+        return ok_lines + error_lines
+
+    def _finish_batch(self, cancelled: bool = False) -> None:
+        dialog = self._batch_dialog
+        self._batch_dialog = None
+        self._batch = False
+        self._pending = []
+        self._set_busy(False)
+        if dialog is not None:
+            dialog.hide()
+            dialog.deleteLater()
+        if cancelled:
+            return
+        outcomes = self._batch_outcomes
+        self._batch_outcomes = []
+        if not outcomes:
+            return
+        lines = self._aggregate_batch_outcomes(outcomes)
+        text = "\n".join(lines)
+        if any(not ok for ok, _context, _text in outcomes):
+            QMessageBox.warning(self, "Consulta completada con errores", text)
+        else:
+            QMessageBox.information(self, "Consulta completada", text)
 
     def cancel_query(self) -> None:
         """Descarta el resultado sin liberar la ventana hasta que el hilo termine."""
@@ -577,25 +811,33 @@ class MainWindow(QMainWindow):
             self._show_status(
                 f"{len(payload)} torrent(s) recibidos en modo solo lectura.", context
             )
+            self._record_batch_outcome(True, context, f"{len(payload)} torrent(s)")
         elif context.startswith("directory:"):
             path = context.split(":", 1)[1]
-            self._fill_directory(payload)
+            self._directory_cache[path] = payload
+            self._fill_directory(path, payload)
             self._show_status(
                 f"{len(payload)} entrada(s) en {path} (solo el nivel inmediato).", context
             )
+            self._record_batch_outcome(True, context, f"{len(payload)} entrada(s)")
 
     @Slot(int, str, str)
     def _on_failure(self, request_id: int, context: str, message: str) -> None:
         if self._closing or self._cancel_requested or request_id != self._active_id:
             return
+        self._record_batch_outcome(False, context, message)
         rows = 0
         if context == "torrents":
             rows = self.torrents_table.rowCount()
         elif context.startswith("directory:"):
-            rows = self.directory_table.rowCount()
+            path = context.split(":", 1)[1]
+            table = self.directory_tables.get(path)
+            rows = table.rowCount() if table is not None else 0
         if rows:
             message += " Se mantienen los últimos datos mostrados."
         self._show_error(message, context)
+        if not self._batch and context == "torrents":
+            QMessageBox.warning(self, "Error al consultar torrents", message)
 
     @Slot(int)
     def _on_finished(self, request_id: int) -> None:
@@ -610,9 +852,23 @@ class MainWindow(QMainWindow):
         self._set_busy(False)
         if self._closing:
             # Cierre diferido: aceptar ahora que no quedan trabajos.
+            if self._batch_dialog is not None:
+                self._batch_dialog.hide()
+                self._batch_dialog.deleteLater()
+                self._batch_dialog = None
             self._show_neutral("Consulta finalizada; cerrando la ventana.")
             if not self._tasks:
                 self.close()
+            return
+        if self._batch:
+            if cancelled:
+                self._pending = []
+            if self._batch_dialog is not None:
+                self._batch_dialog.set_value(self._batch_total - len(self._pending))
+            if self._pending:
+                self._start_next_batch_query()
+                return
+            self._finish_batch(cancelled)
             return
         if cancelled:
             self._show_neutral(
@@ -635,11 +891,14 @@ class MainWindow(QMainWindow):
             for column, value in enumerate(values):
                 self.torrents_table.setItem(row, column, QTableWidgetItem(str(value)))
 
-    def _fill_directory(self, entries: list[dict]) -> None:
-        self.directory_table.setRowCount(0)
+    def _fill_directory(self, path: str, entries: list[dict]) -> None:
+        table = self.directory_tables.get(path)
+        if table is None:
+            return
+        table.setRowCount(0)
         for entry in entries:
-            row = self.directory_table.rowCount()
-            self.directory_table.insertRow(row)
+            row = table.rowCount()
+            table.insertRow(row)
             is_dir = entry.get("type") == "dir"
             values = [
                 entry.get("name", "—"),
@@ -647,7 +906,7 @@ class MainWindow(QMainWindow):
                 "—" if is_dir else _format_size(entry.get("size")),
             ]
             for column, value in enumerate(values):
-                self.directory_table.setItem(row, column, QTableWidgetItem(str(value)))
+                table.setItem(row, column, QTableWidgetItem(str(value)))
 
     def closeEvent(self, event) -> None:
         # Ceder foco consolida la celda/combobox activa antes del cierre del catálogo.
@@ -658,6 +917,10 @@ class MainWindow(QMainWindow):
         if self._tasks:
             # Sin waitForDone: se ignora el cierre, se cancela (marca
             # cooperativa, nunca terminate) y se cierra al llegar «finished».
+            if self._batch_dialog is not None:
+                self._batch_dialog.hide()
+                self._batch_dialog.deleteLater()
+                self._batch_dialog = None
             for task in self._tasks.values():
                 task.cancel()
             self._cancel_requested = True
@@ -682,6 +945,7 @@ def main() -> int:
     app = QApplication(sys.argv)
     window = MainWindow()
     window.show()
+    QTimer.singleShot(0, window.startup_query)
     return app.exec()
 
 
