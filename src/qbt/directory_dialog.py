@@ -18,6 +18,7 @@ from PySide6.QtWidgets import (
 )
 
 from .config import DIRECTORY_KINDS, ConfigError, DirectoryConfig, validate_directories
+from .style import TABLE_SELECTION_QSS
 
 
 class DirectoryConfigDialog(QDialog):
@@ -45,6 +46,7 @@ class DirectoryConfigDialog(QDialog):
         self.table.setColumnWidth(0, 480)
         self.table.setColumnWidth(1, 140)
         self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.table.setStyleSheet(TABLE_SELECTION_QSS)
         self.table.setEditTriggers(
             QAbstractItemView.DoubleClicked | QAbstractItemView.EditKeyPressed
         )

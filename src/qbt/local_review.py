@@ -14,8 +14,20 @@ from .classification import classify
 from .destinations import candidate_destinations, propose_destination
 from .torrent import TorrentError, read_torrent
 from .review import find_matches
+from .style import TABLE_SELECTION_QSS
 
 KINDS = ("Sin determinar", "Película", "Serie", "Libro", "Otros")
+
+# Además de la selección de fila, los desplegables de celda reflejan la fila
+# seleccionada: se marcan con la propiedad dinámica «rowSelected».
+_TABLE_QSS = TABLE_SELECTION_QSS + (
+    "QComboBox[rowSelected=\"true\"] {"
+    " background: palette(highlight); color: palette(highlighted-text); }"
+    "QComboBox[rowSelected=\"true\"] QLineEdit {"
+    " background: palette(highlight); color: palette(highlighted-text); }"
+    "QComboBox[rowSelected=\"true\"] QAbstractItemView {"
+    " background: palette(base); color: palette(text); }"
+)
 
 
 def _valid_destination(value: str) -> bool:
@@ -62,6 +74,8 @@ class LocalReviewPanel(QGroupBox):
         self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.table.setSelectionMode(QAbstractItemView.ExtendedSelection)
         self.table.itemChanged.connect(self._item_changed)
+        self.table.setStyleSheet(_TABLE_QSS)
+        self.table.itemSelectionChanged.connect(self._apply_row_selection)
         layout.addWidget(self.table)
         if catalog_path is None:
             catalog_path = (Path(settings.fileName()).with_suffix(".sqlite3")
@@ -233,7 +247,10 @@ class LocalReviewPanel(QGroupBox):
                           f"{record.season:02d}" if record.season is not None else "—",
                           record.confidence, record.destination, "", self._warnings(record)]
                 for column, value in enumerate(values):
-                    item = QTableWidgetItem(value)
+                    # Las celdas con desplegable (1 y 5) no duplican el texto en
+                    # el item: lo dibuja el propio desplegable. Evita el texto
+                    # fantasma por superposición.
+                    item = QTableWidgetItem("" if column in (1, 5) else value)
                     if column not in (2, 3):
                         item.setFlags(item.flags() & ~Qt.ItemIsEditable)
                     if column == 6:
@@ -264,9 +281,24 @@ class LocalReviewPanel(QGroupBox):
                 )
                 self.table.setCellWidget(row, 5, destination)
             self.table.resizeRowsToContents()
+            self._apply_row_selection()
         finally:
             self.table.blockSignals(False)
             self._rendering = False
+
+    def _apply_row_selection(self) -> None:
+        """Refleja la selección de fila en los desplegables de celda."""
+        selected = {index.row() for index in self.table.selectedIndexes()}
+        for row in range(self.table.rowCount()):
+            for column in (1, 5):
+                widget = self.table.cellWidget(row, column)
+                if widget is None:
+                    continue
+                highlighted = row in selected
+                if widget.property("rowSelected") != highlighted:
+                    widget.setProperty("rowSelected", highlighted)
+                    widget.style().unpolish(widget)
+                    widget.style().polish(widget)
 
     def _change(self, source: str, **changes) -> None:
         if self._rendering or self._catalog is None:

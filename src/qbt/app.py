@@ -38,6 +38,7 @@ from .connection_dialog import ConnectionDialog, LOCAL_URL_SUGGESTION
 from .directory_dialog import DirectoryConfigDialog
 from .local_review import LocalReviewPanel
 from .qbittorrent import QBittorrentClient, QBittorrentError
+from .style import TABLE_SELECTION_QSS
 
 QUERY_TIMEOUT = 6.0  # inactividad por operación de socket, no plazo total
 # Persistencia de anchos de columna: solo geometría de la interfaz local.
@@ -404,6 +405,7 @@ class MainWindow(QMainWindow):
             self.torrents_table.setColumnWidth(column, width)
         self.torrents_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.torrents_table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.torrents_table.setStyleSheet(TABLE_SELECTION_QSS)
         torrents_layout.addWidget(self.torrents_table, 1)
         self.remote_tabs.addTab(torrents_page, "Torrents")
 
@@ -513,6 +515,7 @@ class MainWindow(QMainWindow):
             table.setColumnWidth(column, width)
         table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        table.setStyleSheet(TABLE_SELECTION_QSS)
         return table
 
     def _rebuild_directory_tabs(self) -> None:

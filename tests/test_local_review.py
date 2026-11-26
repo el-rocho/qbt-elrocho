@@ -377,6 +377,33 @@ class LocalReviewTests(unittest.TestCase):
 
         self.assertEqual(window.local_table.rowCount(), 1)
 
+    def test_combo_cells_do_not_duplicate_the_item_text(self):
+        source = self.root / "DEMO.Serie.S02E01.torrent"
+        make_torrent(source)
+        window = self.window()
+        window.import_files([str(source)])
+        table = window.local_table
+        # El valor lo muestra el desplegable; el item de la celda queda vacío
+        # para que no se dibuje un segundo texto (fantasma) debajo.
+        self.assertEqual(table.item(0, 1).text(), "")
+        self.assertEqual(table.cellWidget(0, 1).currentText(), "Serie")
+        self.assertEqual(table.item(0, 5).text(), "")
+        self.assertEqual(table.cellWidget(0, 5).currentText(), "/library/series")
+
+    def test_selected_row_highlights_combo_widgets(self):
+        source = self.root / "DEMO.Serie.S02E01.torrent"
+        make_torrent(source)
+        window = self.window()
+        window.import_files([str(source)])
+        table = window.local_table
+        self.assertIn("selection-background-color", table.styleSheet())
+        table.selectRow(0)
+        QApplication.processEvents()
+        self.assertEqual(table.cellWidget(0, 1).property("rowSelected"), True)
+        table.clearSelection()
+        QApplication.processEvents()
+        self.assertEqual(table.cellWidget(0, 1).property("rowSelected"), False)
+
     def _open_cell_editor(self, window, column):
         table = window.local_table
         table.setCurrentCell(0, column)
