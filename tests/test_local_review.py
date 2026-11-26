@@ -117,6 +117,25 @@ class LocalReviewTests(unittest.TestCase):
             self.assertEqual(window.local_table.cellWidget(0, 5).currentText(), DEFAULT_PATHS[1])
             self.assertIn("ruta absoluta", window.local_status_label.text())
 
+    def test_opening_destination_popup_does_not_rebuild_and_close_it(self):
+        source = self.root / "DEMO.Serie.S02E01.torrent"
+        make_torrent(source)
+        window = self.window()
+        window.import_files([str(source)])
+        window.show()
+        window.activateWindow()
+        QApplication.processEvents()
+        combo = window.local_table.cellWidget(0, 5)
+        combo.showPopup()
+        QApplication.processEvents()
+        # Al abrir el popup el lineEdit pierde el foco y emite editingFinished
+        # con el texto sin cambios: no debe reconstruirse el desplegable (eso
+        # cerraría el popup y haría imposible elegir).
+        combo.lineEdit().editingFinished.emit()
+        QApplication.processEvents()
+        self.assertIs(window.local_table.cellWidget(0, 5), combo)
+        self.assertTrue(combo.view().isVisible())
+
     def test_missing_or_changed_sources_are_excluded_on_reopen_and_can_be_reimported(self):
         source = self.root / "DEMO.Serie.S02E01.torrent"
         make_torrent(source)

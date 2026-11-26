@@ -283,6 +283,11 @@ class LocalReviewPanel(QGroupBox):
                 self._reject("Destino no válido: indique una ruta absoluta sin caracteres de control.")
                 self._render()
                 return
+            if destination == record.destination:
+                # Al abrir el popup el lineEdit pierde el foco y emite
+                # editingFinished con el mismo texto; reconstruir aquí el
+                # desplegable lo cerraría sin que hubiera cambio real.
+                return
         if "kind" in changes:
             changes["confidence"] = "manual"
             prior = [record for record in self._records if record.source != source]
