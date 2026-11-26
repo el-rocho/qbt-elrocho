@@ -19,13 +19,15 @@ escritura se mantendrá la revisión y aprobación explícita por lote.
 Consulte la [guía de configuración](docs/configuracion.md): instalación, primer
 inicio, URL, directorios, almacenamiento y recuperación de errores.
 
-**Generalización, fase 1 implementada en el árbol de desarrollo:** las nuevas
-instalaciones no incluyen ningún servidor ni directorio personal. Un diálogo
-permite elegir instalación local, otro entorno o trabajo sin conexión, probar
-la versión y guardar la preferencia de consulta al iniciar. Las configuraciones
-anteriores válidas se conservan. Aún no hay inicio de sesión desde la interfaz,
-importación de carpetas ni detección de capacidades. Windows sigue pendiente de
-validación manual de esta fase.
+**Configuración y autenticación:** las instalaciones nuevas no incluyen ningún
+servidor ni directorio personal. Configuración permite elegir instalación local,
+remota o trabajo sin conexión, iniciar una sesión propia con usuario y contraseña
+y comprobar las versiones de qBittorrent y Web API. Los servidores que permiten
+acceso sin credenciales siguen funcionando. Contraseña y cookies no se escriben
+en disco; la sesión se pierde al cerrar. La compatibilidad se deduce de la versión
+de Web API, no demuestra permisos de carpetas ni de escritura. La autenticación
+está implementada; su validación manual en Windows sigue pendiente.
+Aún no hay importación de carpetas ni aislamiento de destinos por servidor.
 
 ## Interfaz
 
@@ -86,6 +88,27 @@ a la cabecera de conexión; Revisión local conserva su estilo.
   progreso mientras se ejecutan las llamadas secuenciales y, al terminar, un
   único aviso agregado con el resultado (o los errores) de cada consulta. No se
   guardan credenciales ni claves.
+
+### Acceso y funciones
+
+En **Configuración**, marque «Usar usuario y contraseña de qBittorrent» solo si
+el servidor lo requiere, introduzca las credenciales y pulse «Comprobar acceso y
+funciones». La contraseña se retira del campo al iniciar la comprobación; la
+sesión de prueba solo se aplica al pulsar «Guardar». Cancelar o editar los datos
+descarta esa sesión y no cambia la conexión activa. «Probar conexión» sigue
+consultando únicamente la versión, sin iniciar sesión.
+
+El listado de torrents requiere Web API v2; el de directorios con metadatos,
+Web API v2 desde 2.11.8. Tras comprobar y guardar la conexión se deshabilitan las
+funciones que esa versión no admite. Si no se han comprobado las capacidades,
+las consultas manuales siguen disponibles y pueden devolver un error. No se
+prueban permisos de escritura ni se modifica la seguridad del servidor.
+
+Cambiar de URL, guardar modo sin conexión o cerrar olvida la sesión local. Un
+401/403 también la invalida y pide revisar Configuración, sin reintentos
+automáticos. No hay almacén de credenciales: tras reabrir, vuelva a iniciar sesión
+si el servidor la exige. HTTP no cifra las credenciales; use HTTPS fuera de un
+entorno de confianza. Se rechazan redirecciones: indique directamente la URL final.
 
 ### Ancho de columnas
 
@@ -177,9 +200,11 @@ avisos. No son lecturas de un servidor real.
 
 ## Límites y seguridad
 
-El acceso al servidor es exclusivamente de lectura: no hay `POST`, envío de
-torrents, cambios de preferencias ni vigilancia de carpetas. SQLite solo
-almacena la revisión local, sin credenciales ni respuestas remotas.
+Las consultas de contenido son de solo lectura. El único `POST` es `auth/login`
+al iniciar sesión expresamente; no hay envío de torrents, cambios de preferencias
+ni vigilancia de carpetas. SQLite solo almacena la revisión local, sin credenciales
+ni respuestas remotas. Olvidar la cookie local no revoca la sesión del servidor: allí
+caduca según sus propios ajustes; no se comparte con el navegador.
 
 - Tiempo de espera de cada operación de socket: **6 s de inactividad**, no un
   plazo total. Es el `timeout` de `urllib`: si la conexión avanza lentamente
@@ -235,8 +260,9 @@ docs/capturas capturas de la interfaz con datos DEMO (ficticios, sin red)
 ## Pruebas
 
 Las pruebas usan un servidor HTTP local estricto: solo responden las rutas y
-consultas registradas por cada prueba; cualquier otra ruta devuelve `404` y los
-métodos distintos de `GET` devuelven `405`. No se contacta el servidor real.
+consultas registradas por cada prueba; las pruebas de sesión añaden únicamente
+el `POST auth/login` previsto y validan formulario, cabeceras y cookies. Las
+rutas no registradas no devuelven éxitos de conveniencia. No se contacta el servidor real.
 
 ```bash
 # Linux, desde la raíz del repositorio y con el entorno virtual activado:

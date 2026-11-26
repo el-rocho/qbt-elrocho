@@ -1,8 +1,9 @@
 # Instalación y configuración
 
-Esta guía corresponde a la generalización, **fase 1 del árbol de desarrollo**.
-No incluye todavía autenticación desde la interfaz. La aplicación no envía
-torrents, no inicia descargas y no cambia preferencias del servidor.
+Esta guía incluye la configuración neutral, la autenticación con sesión propia
+y la comprobación de compatibilidad de la Web API. La validación manual de esta
+fase en Windows sigue pendiente. La aplicación no envía torrents, no inicia
+descargas y no cambia preferencias del servidor.
 
 ## Instalar y abrir
 
@@ -77,13 +78,46 @@ En qBittorrent debe estar habilitada la WebUI y su dirección debe ser accesible
 para la aplicación. Compruebe sus ajustes y pruebe la dirección en su navegador.
 **La sesión del navegador no se comparte con esta aplicación.**
 
-### Autenticación: límite de esta fase
+### Iniciar sesión y comprobar funciones
 
-Todavía no hay campos de usuario, contraseña ni clave API en la interfaz. Si el
-servidor exige autenticación, esta fase no podrá consultarlo. **No desactive sus
-protecciones ni amplíe listas blancas para eludir esta limitación**: continúe sin
-conexión hasta la fase de autenticación. No introduzca secretos en la URL.
-La aplicación no configura el servidor, el cortafuegos ni los certificados.
+1. Abra **Configuración** y compruebe la URL.
+2. Si el servidor exige login, marque **Usar usuario y contraseña de qBittorrent**
+   y rellene ambos campos. Si permite acceso sin credenciales, deje la casilla sin marcar.
+3. Pulse **Comprobar acceso y funciones**. Si procede, se inicia sesión y después
+   se leen las versiones de qBittorrent y Web API. La contraseña desaparece del
+   campo al lanzar la petición; para reintentar, vuelva a introducirla.
+4. Revise el resultado y pulse **Guardar** para aplicar la conexión y su sesión.
+   Probar no guarda ni sustituye la conexión activa. Cancelar descarta el borrador;
+   cambiar URL, usuario, contraseña o modo invalida su comprobación anterior.
+
+**Probar conexión** es una prueba distinta: solo consulta la versión y no inicia
+sesión con las credenciales del formulario. Para un servidor protegido, use
+**Comprobar acceso y funciones**.
+
+La sesión vive únicamente en memoria y se reutiliza en las consultas de la
+ventana, también en lotes. No se guarda el usuario, la contraseña ni la cookie
+en JSON, SQLite o INI; no hay opción de recordarlos en esta fase. Al cerrar o
+cambiar de URL, se olvida la sesión local. Guardar modo sin conexión también la
+descarta. No se envía logout al servidor ni se toca la sesión de su navegador.
+Tras reabrir, deberá iniciar sesión de nuevo si el servidor la exige; una consulta
+inicial automática puede fallar hasta que lo haga. Puede desactivarla.
+
+Un 401/403 invalida la sesión, detiene las consultas restantes del lote e indica
+que revise Configuración. No se reenvía automáticamente la contraseña ni se
+reintenta un login. Un 403 también puede indicar bloqueo u otra restricción;
+no demuestra por sí solo que la contraseña sea incorrecta.
+
+La comprobación de funciones deriva de la versión de **Web API**: torrents en
+v2 y directorios con metadatos desde v2 **2.11.8**. Tras guardar se deshabilitan
+solo las funciones incompatibles; la revisión local sigue disponible. **No
+demuestra permisos de lectura en todas las rutas ni permisos de escritura.** Sin
+esta comprobación, puede intentar las consultas y recibir un error del servidor.
+
+No introduzca secretos en la URL ni desactive las protecciones de qBittorrent.
+HTTP no cifra credenciales ni cookies: use HTTPS fuera de un entorno de confianza.
+No se omite la validación TLS. Se rechazan las redirecciones, incluso al mismo
+servidor: configure la URL final, incluido el prefijo del proxy. La aplicación
+no configura el servidor, el cortafuegos ni los certificados.
 
 ## Directorios de almacenamiento
 
@@ -144,10 +178,12 @@ a mano. No comparta su catálogo sin revisar rutas y metadatos personales.
 
 - **No conecta:** compruebe que qBittorrent está iniciado, la WebUI habilitada y
   la URL/puerto correctos. Para otro equipo, revise la conectividad de red.
-- **401/403:** puede requerirse autenticación u otra autorización. Esta fase no
-  ofrece login. No implica necesariamente una contraseña errónea.
-- **404 o respuesta no válida:** revise URL y prefijo del proxy. No se comprueba
-  todavía la compatibilidad de cada función antes de consultar.
+- **401/403:** abra Configuración e inicie sesión o compruebe el acceso de nuevo.
+  Puede ser una sesión caducada u otra restricción; no implica necesariamente
+  una contraseña errónea. No hay reintento automático.
+- **404 o respuesta no válida:** revise URL y prefijo del proxy. Compruebe acceso
+  y funciones; la compatibilidad por versión no garantiza cada ruta ni permiso.
+- **Redirección:** escriba directamente la URL final; no se siguen redirecciones.
 - **Configuración ilegible, incompatible o URL guardada inválida:** se muestra
   un aviso persistente, no se inicia ninguna consulta automática y el archivo
   queda protegido contra guardados desde la interfaz; «Configurar directorios»
@@ -160,7 +196,7 @@ a mano. No comparta su catálogo sin revisar rutas y metadatos personales.
   la petición. Cerrar la ventana también espera sin destruir el trabajador.
 
 En esta fase los lotes de consultas aún usan progreso modal y un aviso agregado
-al terminar. El progreso no modal, la autenticación, la detección de capacidades,
+al terminar. El progreso no modal, el almacén seguro opcional de credenciales,
 la importación de la carpeta del servidor y el aislamiento de destinos por
 servidor son fases posteriores, no funciones ya entregadas.
 

@@ -160,7 +160,7 @@ def _format_progress(progress: float | None) -> str:
 
 class _QuerySignals(QObject):
     succeeded = Signal(int, str, object)
-    failed = Signal(int, str, str)
+    failed = Signal(int, str, object)
     finished = Signal(int)
 
 
@@ -190,7 +190,7 @@ class _QueryTask(QRunnable):
             result = self._operation()
         except QBittorrentError as exc:
             if not self._cancelled.is_set():
-                self._signals.failed.emit(self.request_id, self._context, str(exc))
+                self._signals.failed.emit(self.request_id, self._context, exc)
         except Exception:
             if not self._cancelled.is_set():
                 self._signals.failed.emit(
@@ -202,6 +202,9 @@ class _QueryTask(QRunnable):
             if not self._cancelled.is_set():
                 self._signals.succeeded.emit(self.request_id, self._context, result)
         finally:
+            # Una operación de login captura la contraseña; no conservarla en
+            # un QRunnable ya terminado mientras se procesan señales Qt.
+            self._operation = None
             self._signals.finished.emit(self.request_id)
 
 
@@ -290,6 +293,10 @@ class MainWindow(QMainWindow):
         self._app_config = AppConfig()
         self._config_load_error = ""
         self._setup_dialog: ConnectionDialog | None = None
+        self._client: QBittorrentClient | None = None
+        self._capabilities = None
+        self._setup_client: QBittorrentClient | None = None
+        self._setup_capabilities = None
         if hasattr(self._settings, "fileName"):
             self._config_path = Path(self._settings.fileName()).with_suffix(".json")
             if self._config_path.exists():
@@ -591,7 +598,7 @@ class MainWindow(QMainWindow):
 
     def _label_for_context(self, context: str) -> QLabel:
         """Etiqueta de origen de la consulta, no la pestaña visible al responder."""
-        if context == "setup" and self._setup_dialog is not None:
+        if context in {"setup", "setup_access"} and self._setup_dialog is not None:
             return self._setup_dialog.status_label
         if context == "torrents":
             return self.torrents_status_label
@@ -617,6 +624,9 @@ class MainWindow(QMainWindow):
         offline = self._app_config.connection_mode == "offline"
         for button in (self.version_button, self.torrents_button, self.directory_button):
             button.setEnabled(not busy and not offline)
+        if self._capabilities is not None:
+            self.torrents_button.setEnabled(not busy and not offline and self._capabilities.torrents)
+            self.directory_button.setEnabled(not busy and not offline and self._capabilities.directories)
         self.directory_config_button.setEnabled(not busy and not self._config_load_error)
         self.connection_config_button.setEnabled(not busy)
         # Tras pedir la cancelación el botón se apaga, pero la ventana sigue
@@ -637,6 +647,19 @@ class MainWindow(QMainWindow):
         updated = replace(self._app_config, base_url=normalized)
         return self._store_config(updated)
 
+    def _reset_connection(self) -> None:
+        if self._client is not None:
+            self._client.clear_session()
+        self._client = None
+        self._capabilities = None
+        self.local_group.set_remote_torrents(None)
+        self.torrents_table.setRowCount(0)
+        self._directory_cache.clear()
+        for table in self.directory_tables.values():
+            table.setRowCount(0)
+        self._show_neutral(IDLE_TORRENTS_TEXT, "torrents")
+        self._show_neutral(IDLE_DIRECTORY_TEXT, DIRECTORY_CONTEXT)
+
     def _on_url_changed(self, text: str) -> None:
         """Cambiar de servidor invalida los datos del anterior."""
         if self._closing:
@@ -644,16 +667,9 @@ class MainWindow(QMainWindow):
         had_rows = bool(self.torrents_table.rowCount() or any(
             table.rowCount() for table in self.directory_tables.values()
         ))
-        self.local_group.set_remote_torrents(None)
-        self.torrents_table.setRowCount(0)
-        self._directory_cache.clear()
-        for table in self.directory_tables.values():
-            table.setRowCount(0)
-        # Las etiquetas de cada pestaña no deben seguir afirmando datos del
-        # servidor anterior: vuelven a su texto inicial.
-        self._show_neutral(IDLE_TORRENTS_TEXT, "torrents")
-        self._show_neutral(IDLE_DIRECTORY_TEXT, DIRECTORY_CONTEXT)
+        self._reset_connection()
         self._persist_url(text)
+        self._set_busy(self.busy)
         if self.busy:
             self.cancel_query()
             return
@@ -665,6 +681,52 @@ class MainWindow(QMainWindow):
         else:
             self._show_neutral(IDLE_CONNECTION_TEXT)
 
+    def _client_for_url(self, base_url: str) -> QBittorrentClient:
+        if self._client is None or self._client.base_url != base_url:
+            if self._client is not None:
+                self._client.clear_session()
+            self._client = QBittorrentClient(base_url, timeout=QUERY_TIMEOUT)
+            self._capabilities = None
+        return self._client
+
+    def _discard_setup_session(self) -> None:
+        if self._setup_client is not None:
+            self._setup_client.clear_session()
+        self._setup_client = None
+        self._setup_capabilities = None
+
+    def _check_access(self) -> None:
+        dialog = self._setup_dialog
+        if (dialog is None or self.busy or self._closing
+                or dialog.mode_combo.currentData() == "offline"):
+            return
+        self._discard_setup_session()
+        try:
+            url = validate_base_url(dialog.url_edit.text())
+        except ValueError as exc:
+            dialog.status_label.setText(str(exc))
+            return
+        use_auth = dialog.auth_check.isChecked()
+        username, password = dialog.username_edit.text(), dialog.password_edit.text()
+        if use_auth and (not username or not password):
+            dialog.status_label.setText("Indique usuario y contraseña para comprobar el acceso.")
+            return
+        candidate = QBittorrentClient(url, timeout=QUERY_TIMEOUT)
+        self._setup_client = candidate
+        # El formulario no retiene la contraseña tras iniciar la petición.
+        dialog.password_edit.blockSignals(True)
+        try:
+            dialog.password_edit.clear()
+        finally:
+            dialog.password_edit.blockSignals(False)
+
+        def check(client):
+            if use_auth:
+                client.login(username, password)
+            return client.capabilities()
+
+        self._dispatch_query(check, "setup_access", "Comprobando acceso y funciones…", candidate)
+
     def _start_query(self, operation, context: str, busy_text: str) -> None:
         if self.busy or self._closing or self._app_config.connection_mode == "offline":
             return
@@ -673,7 +735,7 @@ class MainWindow(QMainWindow):
         except ValueError as exc:
             self._show_error(str(exc), context)
             return
-        client = QBittorrentClient(base_url, timeout=QUERY_TIMEOUT)
+        client = self._client_for_url(base_url)
         self._dispatch_query(operation, context, busy_text, client)
 
     def _dispatch_query(self, operation, context: str, busy_text: str,
@@ -701,6 +763,9 @@ class MainWindow(QMainWindow):
         )
 
     def query_torrents(self) -> None:
+        if self._capabilities is not None and not self._capabilities.torrents:
+            self._show_error("La Web API no es compatible con esta consulta.", "torrents")
+            return
         self._start_query(
             lambda client: client.torrents_info(include_files=False),
             "torrents",
@@ -708,6 +773,12 @@ class MainWindow(QMainWindow):
         )
 
     def query_directories(self) -> None:
+        if self._capabilities is not None and not self._capabilities.directories:
+            self._show_error(
+                "La Web API no es compatible con el listado de directorios con metadatos.",
+                DIRECTORY_CONTEXT,
+            )
+            return
         if self.busy or self._closing or self._app_config.connection_mode == "offline":
             return
         try:
@@ -738,6 +809,15 @@ class MainWindow(QMainWindow):
             self._setup_dialog = ConnectionDialog(self._app_config, self)
             self._setup_dialog.save_button.clicked.connect(self._save_connection_config)
             self._setup_dialog.test_button.clicked.connect(self._test_connection)
+            self._setup_dialog.access_button.clicked.connect(self._check_access)
+            for signal in (
+                self._setup_dialog.url_edit.textChanged,
+                self._setup_dialog.mode_combo.currentIndexChanged,
+                self._setup_dialog.auth_check.toggled,
+                self._setup_dialog.username_edit.textChanged,
+                self._setup_dialog.password_edit.textChanged,
+            ):
+                signal.connect(self._discard_setup_session)
             self._setup_dialog.rejected.connect(self._cancel_connection_test)
         self._setup_dialog.show()
         self._setup_dialog.raise_()
@@ -757,14 +837,22 @@ class MainWindow(QMainWindow):
                              QBittorrentClient(url, timeout=QUERY_TIMEOUT))
 
     def _cancel_connection_test(self) -> None:
-        if self._active_context == "setup":
+        if self._active_context in {"setup", "setup_access"}:
             self.cancel_query()
+        elif not self.busy:
+            self._discard_setup_session()
 
     def _save_connection_config(self) -> None:
         dialog = self._setup_dialog
         if dialog is None or self.busy or self._closing:
             return
         mode = dialog.mode_combo.currentData()
+        if (mode != "offline" and dialog.auth_check.isChecked()
+                and self._setup_capabilities is None):
+            dialog.status_label.setText(
+                "Debe comprobar el acceso con sus credenciales antes de guardar."
+            )
+            return
         try:
             url = (self._app_config.base_url if mode == "offline"
                    else validate_base_url(dialog.url_edit.text()))
@@ -776,6 +864,15 @@ class MainWindow(QMainWindow):
         if not self._store_config(updated):
             dialog.status_label.setText(self.config_status_label.text())
             return
+        if (url != self.url_edit.text() or mode == "offline"
+                or self._setup_capabilities is not None):
+            self._reset_connection()
+        if (self._setup_client is not None and self._setup_capabilities is not None
+                and mode != "offline" and self._setup_client.base_url == url):
+            self._client = self._setup_client
+            self._capabilities = self._setup_capabilities
+            self._setup_client = None
+            self._setup_capabilities = None
         # Sincroniza la cabecera sin repetir el guardado ni los efectos de
         # cambio de servidor: la configuración ya quedó persistida.
         self.url_edit.blockSignals(True)
@@ -844,7 +941,16 @@ class MainWindow(QMainWindow):
             self._pending = []
             self._finish_batch()
             return
-        client = QBittorrentClient(base_url, timeout=QUERY_TIMEOUT)
+        client = self._client_for_url(base_url)
+        if self._capabilities is not None and (
+            (context == "torrents" and not self._capabilities.torrents)
+            or (context.startswith(DIRECTORY_CONTEXT) and not self._capabilities.directories)
+        ):
+            message = "Consulta omitida: función no compatible con la Web API comprobada."
+            self._show_error(message, context)
+            self._record_batch_outcome(False, context, message)
+            self._start_next_batch_query()
+            return
         if self._batch_dialog is not None:
             self._batch_dialog.set_text(busy_text)
         self._dispatch_query(operation, context, busy_text, client)
@@ -917,7 +1023,17 @@ class MainWindow(QMainWindow):
     def _on_success(self, request_id: int, context: str, payload) -> None:
         if self._closing or self._cancel_requested or request_id != self._active_id:
             return
-        if context in {"version", "setup"}:
+        if context == "setup_access":
+            self._setup_capabilities = payload
+            access = "Sesión autenticada" if self._setup_client.authenticated else "Acceso sin credenciales"
+            self._show_status(
+                f"{access}. qBittorrent {payload.version}; Web API {payload.webapi_version}. "
+                f"Torrents: {'compatible' if payload.torrents else 'no compatible'}. "
+                f"Directorios: {'compatible' if payload.directories else 'no compatible'}. "
+                "Compatibilidad según versión; no comprueba permisos de carpetas ni de escritura. "
+                "Pulse Guardar para aplicar esta conexión.", context,
+            )
+        elif context in {"version", "setup"}:
             self._show_status(f"Conectado. Versión de qBittorrent: {payload}", context)
         elif context == "torrents":
             self._fill_torrents(payload)
@@ -934,10 +1050,25 @@ class MainWindow(QMainWindow):
             )
             self._record_batch_outcome(True, context, f"{len(payload)} entrada(s)")
 
-    @Slot(int, str, str)
-    def _on_failure(self, request_id: int, context: str, message: str) -> None:
+    @Slot(int, str, object)
+    def _on_failure(self, request_id: int, context: str, error) -> None:
         if self._closing or self._cancel_requested or request_id != self._active_id:
             return
+        message = str(error)
+        if context == "setup_access":
+            self._discard_setup_session()
+        elif context != "setup" and getattr(error, "status_code", None) in {401, 403}:
+            if self._client is not None:
+                self._client.clear_session()
+            self._capabilities = None
+            self._pending = []
+            message += (
+                " Abra Configuración para comprobar el acceso o iniciar sesión de nuevo. "
+                "No se reintenta automáticamente."
+            )
+            self._show_error(
+                "Acceso rechazado o sesión caducada. " + message
+            )
         self._record_batch_outcome(False, context, message)
         rows = 0
         if context == "torrents":
@@ -963,6 +1094,8 @@ class MainWindow(QMainWindow):
         self._active_context = None
         self._cancel_requested = False
         self._set_busy(False)
+        if cancelled and context in {"setup", "setup_access"}:
+            self._discard_setup_session()
         if self._closing:
             # Cierre diferido: aceptar ahora que no quedan trabajos.
             if self._batch_dialog is not None:
@@ -1046,6 +1179,13 @@ class MainWindow(QMainWindow):
             event.ignore()
             return
         self._pool.clear()
+        if self._client is not None:
+            self._client.clear_session()
+        self._client = None
+        self._capabilities = None
+        self._discard_setup_session()
+        if self._setup_dialog is not None:
+            self._setup_dialog.clear_credentials()
         # Solo en el cierre efectivo (sin trabajos pendientes), también cuando
         # se llega aquí desde el cierre diferido de _on_finished.
         self._save_column_widths()

@@ -38,12 +38,28 @@ class ConnectionDialog(QDialog):
         layout.addWidget(self.url_edit)
         hint = QLabel(
             "localhost:8080 es solo una sugerencia: compruebe la dirección y el puerto "
-            "de la WebUI. Esta fase todavía no permite introducir usuario, contraseña "
-            "ni clave API. No desactive la autenticación para utilizar la aplicación; "
-            "si el servidor la exige, puede continuar con la revisión local."
+            "de la WebUI. La sesión del navegador no se comparte. No desactive la "
+            "autenticación del servidor; puede introducir sus credenciales aquí "
+            "o continuar con la revisión local. HTTP no cifra las credenciales: "
+            "utilice HTTPS fuera de un entorno de confianza."
         )
         hint.setWordWrap(True)
         layout.addWidget(hint)
+        self.auth_check = QCheckBox("Usar usuario y contraseña de qBittorrent")
+        layout.addWidget(self.auth_check)
+        self.username_edit = QLineEdit()
+        self.username_edit.setPlaceholderText("Usuario de qBittorrent")
+        self.username_edit.setAccessibleName("Usuario de qBittorrent")
+        layout.addWidget(self.username_edit)
+        self.password_edit = QLineEdit()
+        self.password_edit.setEchoMode(QLineEdit.Password)
+        self.password_edit.setPlaceholderText("Contraseña (solo en memoria)")
+        self.password_edit.setAccessibleName("Contraseña de qBittorrent")
+        layout.addWidget(self.password_edit)
+        self.access_button = QPushButton("Comprobar acceso y funciones")
+        self.access_button.setAutoDefault(False)
+        self.access_button.setDefault(False)
+        layout.addWidget(self.access_button)
         self.startup_check = QCheckBox("Consultar automáticamente al iniciar")
         self.startup_check.setChecked(config.query_on_startup)
         layout.addWidget(self.startup_check)
@@ -66,7 +82,16 @@ class ConnectionDialog(QDialog):
         self.mode_combo.currentIndexChanged.connect(self._update_mode)
         self.mode_combo.currentIndexChanged.connect(self._clear_probe_result)
         self.url_edit.textChanged.connect(self._clear_probe_result)
+        self.auth_check.toggled.connect(self._update_mode)
+        self.auth_check.toggled.connect(self._clear_probe_result)
+        self.username_edit.textChanged.connect(self._clear_probe_result)
+        self.password_edit.textChanged.connect(self._clear_probe_result)
+        self.finished.connect(self.clear_credentials)
         self._update_mode()
+
+    def clear_credentials(self):
+        self.username_edit.clear()
+        self.password_edit.clear()
 
     def _clear_probe_result(self):
         self.status_label.setStyleSheet("")
@@ -77,6 +102,11 @@ class ConnectionDialog(QDialog):
         self.url_edit.setEnabled(not self._busy and not offline)
         self.startup_check.setEnabled(not self._busy and not offline)
         self.test_button.setEnabled(not self._busy and not offline)
+        self.access_button.setEnabled(not self._busy and not offline)
+        self.auth_check.setEnabled(not self._busy and not offline)
+        auth = self.auth_check.isChecked()
+        self.username_edit.setEnabled(not self._busy and not offline and auth)
+        self.password_edit.setEnabled(not self._busy and not offline and auth)
 
     def set_busy(self, busy):
         self._busy = busy
