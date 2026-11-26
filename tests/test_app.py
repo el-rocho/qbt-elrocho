@@ -19,6 +19,7 @@ from PySide6.QtWidgets import QAbstractItemView, QApplication, QHeaderView
 
 from qbt.app import (
     APPLICATION,
+    APP_ICON_PATH,
     COLUMN_WIDTHS_GROUP,
     DEFAULT_COLUMN_WIDTHS,
     IDLE_CONNECTION_TEXT,
@@ -26,6 +27,7 @@ from qbt.app import (
     IDLE_TORRENTS_TEXT,
     ORGANIZATION,
     MainWindow,
+    _load_app_icon,
 )
 from qbt.config import AppConfig, DirectoryConfig, save as save_config
 
@@ -404,7 +406,7 @@ class MainWindowTests(unittest.TestCase):
     def test_remote_section_has_two_tabs_with_their_own_widgets(self):
         tabs = self.window.remote_tabs
         self.assertEqual(tabs.count(), 2)
-        self.assertEqual(tabs.tabText(0), "Torrents")
+        self.assertEqual(tabs.tabText(0), "Archivos .torrent")
         self.assertEqual(tabs.tabText(1), "Archivos descargados")
         torrents_page, directory_page = tabs.widget(0), tabs.widget(1)
         for widget in (
@@ -449,6 +451,18 @@ class MainWindowTests(unittest.TestCase):
             self.window.directory_status_label,
         ):
             self.assertEqual(label.textFormat(), Qt.TextFormat.PlainText)
+
+    def test_directory_folder_tabs_are_reorderable(self):
+        # Cada carpeta de «Archivos descargados» es una pestaña que el usuario
+        # puede recolocar arrastrándola con el ratón.
+        self.assertTrue(self.window.directory_tabs.isMovable())
+        self.assertTrue(self.window.directory_tabs.tabBar().isMovable())
+        self.assertGreaterEqual(self.window.directory_tabs.count(), 1)
+
+    def test_app_icon_is_packaged_and_loads(self):
+        self.assertTrue(APP_ICON_PATH.is_file())
+        self.assertFalse(_load_app_icon().isNull())
+        self.assertFalse(self.window.windowIcon().isNull())
 
     def test_torrents_messages_stay_in_torrents_tab_when_user_switches_tab(self):
         self.route(self.TORRENTS_PATH, self.TORRENTS_BODY, delay=0.2)

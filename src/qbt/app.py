@@ -7,6 +7,7 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 from PySide6.QtCore import QObject, QRunnable, QSettings, Qt, QThreadPool, QTimer, Signal, Slot
+from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QApplication,
@@ -39,6 +40,17 @@ from .directory_dialog import DirectoryConfigDialog
 from .local_review import LocalReviewPanel
 from .qbittorrent import QBittorrentClient, QBittorrentError
 from .style import TABLE_SELECTION_QSS
+
+# Icono de la aplicación (logo .torrent incluido en el paquete).
+ASSETS_DIR = Path(__file__).parent / "assets"
+APP_ICON_PATH = ASSETS_DIR / "qbt-elrocho.png"
+
+
+def _load_app_icon() -> QIcon:
+    """Devuelve el icono empaquetado; QIcon vacío si el recurso no está."""
+    if APP_ICON_PATH.is_file():
+        return QIcon(str(APP_ICON_PATH))
+    return QIcon()
 
 QUERY_TIMEOUT = 6.0  # inactividad por operación de socket, no plazo total
 # Persistencia de anchos de columna: solo geometría de la interfaz local.
@@ -293,6 +305,7 @@ class MainWindow(QMainWindow):
                 self._config_load_error = str(exc)
                 self._app_config = AppConfig()
         self.setWindowTitle("Gestor qBittorrent — revisión local y consulta remota")
+        self.setWindowIcon(_load_app_icon())
         self.resize(1000, 780)
         self.busy = False
         self._closing = False
@@ -407,7 +420,7 @@ class MainWindow(QMainWindow):
         self.torrents_table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.torrents_table.setStyleSheet(TABLE_SELECTION_QSS)
         torrents_layout.addWidget(self.torrents_table, 1)
-        self.remote_tabs.addTab(torrents_page, "Torrents")
+        self.remote_tabs.addTab(torrents_page, "Archivos .torrent")
 
         directory_page = QWidget()
         directory_layout = QVBoxLayout(directory_page)
@@ -428,6 +441,8 @@ class MainWindow(QMainWindow):
 
         self.directory_tabs = QTabWidget()
         self.directory_tabs.setObjectName("directoryTabs")
+        # Las pestañas de cada carpeta pueden recolocarse arrastrándolas.
+        self.directory_tabs.setMovable(True)
         self.directory_tables: dict[str, QTableWidget] = {}
         directory_layout.addWidget(self.directory_tabs, 1)
         self.remote_tabs.addTab(directory_page, "Archivos descargados")
@@ -1044,6 +1059,7 @@ def main() -> int:
     # El estilo nativo de Windows dibuja los QComboBox embebidos en la tabla con
     # un texto fantasma (doble render). Fusion es consistente y lo evita.
     app.setStyle("Fusion")
+    app.setWindowIcon(_load_app_icon())
     window = MainWindow()
     window.show()
     QTimer.singleShot(0, window.startup_query)

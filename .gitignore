@@ -16,3 +16,4 @@ config.json
 # Capturas y artefactos
 *.png
 !docs/**/*.png
+!src/qbt/assets/**/*.png

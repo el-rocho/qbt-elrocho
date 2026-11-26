@@ -48,7 +48,7 @@ a la cabecera de conexión; Revisión local conserva su estilo.
   etiqueta común bajo la URL. La URL válida se guarda al editarla y se restaura
   al reabrir. En una instalación nueva, confirme el asistente con «Guardar»
   para completar la configuración; escribir en la cabecera no lo completa.
-- **Pestaña «Torrents»:** botón «Consultar torrents», su etiqueta de estado y
+- **Pestaña «Archivos .torrent»:** botón «Consultar torrents», su etiqueta de estado y
   la tabla de solo lectura con nombre, estado traducido, progreso y destino
   (`save_path`). La tabla no se puede editar. Al abrir, se consulta si la
   conexión está configurada, no está en modo sin conexión y la consulta inicial
@@ -61,7 +61,8 @@ a la cabecera de conexión; Revisión local conserva su estilo.
   «Consultar directorios», que consulta **todos** los directorios configurados
   de una vez; cada uno se muestra en su propia pestaña interna con la tabla de
   archivos y carpetas del nivel inmediato. La lectura **no es recursiva**: solo
-  se lista el nivel inmediato de cada ruta.
+  se lista el nivel inmediato de cada ruta. Las pestañas de carpeta pueden
+  recolocarse arrastrándolas con el ratón.
 - **Mensajes por pestaña:** cada consulta escribe su estado (ocupado, éxito,
   error, cancelación y validación de ruta) en la etiqueta de la pestaña donde
   se lanzó. El contexto se captura al iniciar la consulta, no al recibir la
