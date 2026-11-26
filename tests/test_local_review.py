@@ -390,7 +390,7 @@ class LocalReviewTests(unittest.TestCase):
         self.assertEqual(table.item(0, 5).text(), "")
         self.assertEqual(table.cellWidget(0, 5).currentText(), "/library/series")
 
-    def test_selected_row_highlights_combo_widgets(self):
+    def test_table_applies_item_selection_style(self):
         source = self.root / "DEMO.Serie.S02E01.torrent"
         make_torrent(source)
         window = self.window()
@@ -398,11 +398,7 @@ class LocalReviewTests(unittest.TestCase):
         table = window.local_table
         self.assertIn("::item:selected", table.styleSheet())
         table.selectRow(0)
-        QApplication.processEvents()
-        self.assertEqual(table.cellWidget(0, 1).property("rowSelected"), True)
-        table.clearSelection()
-        QApplication.processEvents()
-        self.assertEqual(table.cellWidget(0, 1).property("rowSelected"), False)
+        self.assertIn(0, {index.row() for index in table.selectedIndexes()})
 
     def _open_cell_editor(self, window, column):
         table = window.local_table

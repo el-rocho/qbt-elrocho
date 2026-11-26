@@ -18,17 +18,6 @@ from .style import TABLE_SELECTION_QSS
 
 KINDS = ("Sin determinar", "Película", "Serie", "Libro", "Otros")
 
-# Además de la selección de fila, los desplegables de celda reflejan la fila
-# seleccionada: se marcan con la propiedad dinámica «rowSelected».
-_TABLE_QSS = TABLE_SELECTION_QSS + (
-    "QComboBox[rowSelected=\"true\"] {"
-    " background: palette(highlight); color: palette(highlighted-text); }"
-    "QComboBox[rowSelected=\"true\"] QLineEdit {"
-    " background: palette(highlight); color: palette(highlighted-text); }"
-    "QComboBox[rowSelected=\"true\"] QAbstractItemView {"
-    " background: palette(base); color: palette(text); }"
-)
-
 
 def _valid_destination(value: str) -> bool:
     return not value or (not any(ord(char) < 32 for char in value) and (
@@ -74,8 +63,7 @@ class LocalReviewPanel(QGroupBox):
         self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.table.setSelectionMode(QAbstractItemView.ExtendedSelection)
         self.table.itemChanged.connect(self._item_changed)
-        self.table.setStyleSheet(_TABLE_QSS)
-        self.table.itemSelectionChanged.connect(self._apply_row_selection)
+        self.table.setStyleSheet(TABLE_SELECTION_QSS)
         layout.addWidget(self.table)
         if catalog_path is None:
             catalog_path = (Path(settings.fileName()).with_suffix(".sqlite3")
@@ -281,24 +269,9 @@ class LocalReviewPanel(QGroupBox):
                 )
                 self.table.setCellWidget(row, 5, destination)
             self.table.resizeRowsToContents()
-            self._apply_row_selection()
         finally:
             self.table.blockSignals(False)
             self._rendering = False
-
-    def _apply_row_selection(self) -> None:
-        """Refleja la selección de fila en los desplegables de celda."""
-        selected = {index.row() for index in self.table.selectedIndexes()}
-        for row in range(self.table.rowCount()):
-            for column in (1, 5):
-                widget = self.table.cellWidget(row, column)
-                if widget is None:
-                    continue
-                highlighted = row in selected
-                if widget.property("rowSelected") != highlighted:
-                    widget.setProperty("rowSelected", highlighted)
-                    widget.style().unpolish(widget)
-                    widget.style().polish(widget)
 
     def _change(self, source: str, **changes) -> None:
         if self._rendering or self._catalog is None:
