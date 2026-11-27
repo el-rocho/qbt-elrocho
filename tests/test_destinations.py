@@ -5,8 +5,8 @@ from qbt.config import DirectoryConfig
 from qbt.destinations import candidate_destinations, normalize_title, propose_destination
 
 
-def rec(title, destination="", kind="Serie"):
-    return SimpleNamespace(title=title, destination=destination, kind=kind)
+def rec(title, destination="", kind="Serie", season=None):
+    return SimpleNamespace(title=title, destination=destination, kind=kind, season=season)
 
 
 def dirs(*pairs):
@@ -26,6 +26,32 @@ class ProposeDestinationTests(unittest.TestCase):
         prior = [rec("Tierra de Mafiosos", "/mnt/series/mafiosos")]
         result = propose_destination(
             "Serie", "Tierra.de.Mafiosos", dirs(("/mnt/series", "Serie")), prior
+        )
+        self.assertEqual(result, "/mnt/series/mafiosos")
+
+    def test_series_prefers_destination_of_same_season(self):
+        prior = [
+            rec("Tierra de Mafiosos", "/mnt/series/a/mafiosos", season=1),
+            rec("Tierra de Mafiosos", "/mnt/series/b/mafiosos", season=2),
+        ]
+        result = propose_destination(
+            "Serie", "Tierra de Mafiosos",
+            dirs(("/mnt/series/a", "Serie"), ("/mnt/series/b", "Serie")),
+            prior, season=2,
+        )
+        self.assertEqual(result, "/mnt/series/b/mafiosos")
+
+    def test_series_without_season_match_falls_back_to_title(self):
+        prior = [rec("Tierra de Mafiosos", "/mnt/series/a/mafiosos", season=1)]
+        result = propose_destination(
+            "Serie", "Tierra de Mafiosos", dirs(("/mnt/series/a", "Serie")), prior, season=3
+        )
+        self.assertEqual(result, "/mnt/series/a/mafiosos")
+
+    def test_series_without_season_reuses_prior_destination_by_title(self):
+        prior = [rec("Tierra de Mafiosos", "/mnt/series/mafiosos", season=1)]
+        result = propose_destination(
+            "Serie", "Tierra de Mafiosos", dirs(("/mnt/series", "Serie")), prior, season=None
         )
         self.assertEqual(result, "/mnt/series/mafiosos")
 

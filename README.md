@@ -146,7 +146,9 @@ los destinos de las filas revisadas.
 - **Correcciones:** Tipo es un selector; Título y Temporada se editan con doble
   clic o F2. La clasificación parte del nombre del archivo y es conservadora:
   no decide que un nombre desconocido sea una película. Los cambios manuales
-  quedan identificados como tales.
+  quedan identificados como tales. Al cambiar el tipo o la temporada, si el
+  destino estaba vacío o seguía siendo la propuesta automática, se recalcula;
+  un destino elegido a mano no se sobrescribe.
 - **Destinos por usuario:** cada fila permite seleccionar o escribir su destino
   absoluto; también ofrece los directorios configurados de su tipo y los
   destinos ya guardados del mismo tipo. Películas y libros proponen su
@@ -154,6 +156,8 @@ los destinos de las filas revisadas.
   varias alternativas conocidas, no se elige una automáticamente; la excepción
   es que el título ya exista en un destino guardado o, para series, como carpeta
   en los listados leídos al inicio, en cuyo caso se reutiliza esa ubicación.
+  En series, si entre los destinos guardados hay uno de la misma serie y
+  temporada, se prefiere ese sobre las demás alternativas.
   El tipo «Otros» agrupa lo que no es película, serie ni libro; un directorio
   «Sin determinar» actúa como respaldo cuando no hay uno del tipo concreto.
   Borrar los directorios no elimina las propuestas procedentes del catálogo.

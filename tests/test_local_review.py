@@ -105,6 +105,33 @@ class LocalReviewTests(unittest.TestCase):
         window.local_table.cellWidget(1, 1).setCurrentText("Película")
         self.assertEqual(window.local_table.cellWidget(1, 5).currentText(), DEFAULT_PATHS[0])
 
+    def test_editing_season_reproposes_destination_for_series(self):
+        window = self.window()
+        window._app_config = AppConfig(
+            base_url=window._app_config.base_url,
+            directories=(DirectoryConfig("/mnt/a", "Serie"), DirectoryConfig("/mnt/b", "Serie")),
+        )
+        # Dos registros de la misma serie en temporadas y destinos distintos.
+        first = self.root / "DEMO.Serie.S01E01.torrent"
+        make_torrent(first)
+        window.import_files([str(first)])
+        window.local_table.cellWidget(0, 5).setEditText("/mnt/a")
+        window.local_table.cellWidget(0, 5).lineEdit().editingFinished.emit()
+        second = self.root / "DEMO.Serie.S02E01.torrent"
+        make_torrent(second, byte=b"b")
+        window.import_files([str(second)])
+        window.local_table.cellWidget(1, 5).setEditText("/mnt/b")
+        window.local_table.cellWidget(1, 5).lineEdit().editingFinished.emit()
+        # Nueva fila de la misma serie en temporada 3: sin coincidencia de
+        # temporada cae al destino del título (el primero guardado).
+        third = self.root / "DEMO.Serie.S03E01.torrent"
+        make_torrent(third, byte=b"c")
+        window.import_files([str(third)])
+        self.assertEqual(window.local_table.cellWidget(2, 5).currentText(), "/mnt/a")
+        # Al corregir la temporada a 2 se reutiliza el destino de esa temporada.
+        window.local_table.item(2, 3).setText("2")
+        self.assertEqual(window.local_table.cellWidget(2, 5).currentText(), "/mnt/b")
+
     def test_invalid_destination_does_not_replace_saved_value(self):
         source = self.root / "DEMO.Serie.S02E01.torrent"
         make_torrent(source)

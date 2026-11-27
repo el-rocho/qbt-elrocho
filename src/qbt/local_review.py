@@ -135,9 +135,9 @@ class LocalReviewPanel(QGroupBox):
         options = candidate_destinations(kind, self._directories(), self._records)
         return [option for option in options if _valid_destination(option)]
 
-    def _proposed_destination(self, kind: str, title: str) -> str:
+    def _proposed_destination(self, kind: str, title: str, season: int | None = None) -> str:
         return propose_destination(
-            kind, title, self._directories(), self._records, self._dir_cache()
+            kind, title, self._directories(), self._records, self._dir_cache(), season
         )
 
     def import_files(self, files: list[str]) -> None:
@@ -168,7 +168,7 @@ class LocalReviewPanel(QGroupBox):
                     continue  # Reimportar la misma identidad conserva las correcciones.
                 proposal = classify(source)
                 v1, v2, error = identity.info_hash_v1, identity.info_hash_v2, ""
-            destination = self._proposed_destination(proposal.kind, proposal.title)
+            destination = self._proposed_destination(proposal.kind, proposal.title, proposal.season)
             record = LocalRecord(source, v1, v2, proposal.kind, proposal.title,
                                  proposal.season, proposal.quality, proposal.confidence,
                                  destination, not error and previous is None, error)
@@ -288,15 +288,17 @@ class LocalReviewPanel(QGroupBox):
                 # editingFinished con el mismo texto; reconstruir aquí el
                 # desplegable lo cerraría sin que hubiera cambio real.
                 return
-        if "kind" in changes:
+        if "kind" in changes or "season" in changes:
             changes["confidence"] = "manual"
             prior = [record for record in self._records if record.source != source]
+            new_kind = changes.get("kind", record.kind)
+            new_season = changes.get("season", record.season)
             old_proposal = propose_destination(
-                record.kind, record.title, self._directories(), prior, self._dir_cache()
+                record.kind, record.title, self._directories(), prior, self._dir_cache(), record.season
             )
             if not record.destination or record.destination == old_proposal:
                 changes["destination"] = propose_destination(
-                    changes["kind"], record.title, self._directories(), prior, self._dir_cache()
+                    new_kind, record.title, self._directories(), prior, self._dir_cache(), new_season
                 )
         self._save(replace(record, **changes))
         self._render()

@@ -31,25 +31,33 @@ def candidate_destinations(kind: str, directories, prior_records=()) -> list[str
     return result
 
 
-def propose_destination(kind: str, title: str, directories, prior_records=(), dir_cache=None) -> str:
+def propose_destination(kind: str, title: str, directories, prior_records=(), dir_cache=None, season: int | None = None) -> str:
     """Propone un destino; devuelve '' cuando debe decidirlo el usuario.
 
-    Orden: reutilizar el destino de un registro previo con el mismo título,
-    después la carpeta ya existente (solo series), después el directorio del
-    tipo concreto (varios → que elija el usuario) y, por último, el respaldo.
+    Orden: reutilizar el destino de un registro previo con el mismo título
+    y temporada (solo series), después el de uno con el mismo título, después
+    la carpeta ya existente (solo series), después el directorio del tipo
+    concreto (varios → que elija el usuario) y, por último, el respaldo.
     """
     normalized = normalize_title(title)
-    # 1. Reutilizar el destino de un registro previo con el mismo título.
+    # 1. Serie: reutilizar el destino de la misma serie y temporada.
+    if kind == "Serie" and season is not None:
+        for record in prior_records:
+            if (record.destination
+                    and normalize_title(record.title) == normalized
+                    and getattr(record, "season", None) == season):
+                return record.destination
+    # 2. Reutilizar el destino de un registro previo con el mismo título.
     for record in prior_records:
         if record.destination and normalize_title(record.title) == normalized:
             return record.destination
-    # 2. Serie ya existente como carpeta en los listados de directorios.
+    # 3. Serie ya existente como carpeta en los listados de directorios.
     if kind == "Serie" and dir_cache:
         for directory in directories:
             for entry in dir_cache.get(directory.path, ()):
                 if entry.get("type") == "dir" and normalize_title(entry.get("name", "")) == normalized:
                     return directory.path
-    # 3. Directorios del tipo concreto (contando destinos previos del tipo).
+    # 4. Directorios del tipo concreto (contando destinos previos del tipo).
     concrete = [directory.path for directory in directories if directory.kind == kind]
     prior = [record.destination for record in prior_records if record.kind == kind and record.destination]
     candidates = list(dict.fromkeys(path for path in (*concrete, *prior) if path))
@@ -57,7 +65,7 @@ def propose_destination(kind: str, title: str, directories, prior_records=(), di
         return candidates[0]
     if len(candidates) > 1:
         return ""
-    # 4. Respaldo: directorios «Sin determinar».
+    # 5. Respaldo: directorios «Sin determinar».
     fallback = [directory.path for directory in directories if directory.kind == "Sin determinar"]
     if len(fallback) == 1:
         return fallback[0]
