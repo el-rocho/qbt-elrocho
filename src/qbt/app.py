@@ -335,7 +335,7 @@ class MainWindow(QMainWindow):
         central = QWidget()
         root = QVBoxLayout(central)
 
-        local_group = LocalReviewPanel(self._settings, self._directories, self._dir_cache, catalog_path)
+        local_group = LocalReviewPanel(self._settings, self._directories, self._dir_cache, catalog_path, self._current_server)
         self.local_group = local_group
         self.local_status_label = local_group.status_label
         self.local_table = local_group.table
@@ -522,8 +522,24 @@ class MainWindow(QMainWindow):
 
     # --- revisión local -------------------------------------------------
 
+    def _current_server(self) -> str:
+        """Servidor activo (URL base normalizada) o '' si no hay conexión.
+
+        Es la clave con la que se asocian directorios y destinos del catálogo;
+        cambiar de URL cambia la clave y deja de ofrecer los del servidor anterior.
+        """
+        if self._app_config.connection_mode == "offline" or not self._app_config.base_url:
+            return ""
+        try:
+            return validate_base_url(self._app_config.base_url)
+        except ValueError:
+            return ""
+
     def _directories(self) -> list[DirectoryConfig]:
-        return list(self._app_config.directories)
+        """Directorios del servidor activo; los de otros servidores se ocultan."""
+        server = self._current_server()
+        return [directory for directory in self._app_config.directories
+                if directory.server == server]
 
     def _dir_cache(self) -> dict[str, list[dict]]:
         return self._directory_cache
@@ -543,13 +559,14 @@ class MainWindow(QMainWindow):
     def _rebuild_directory_tabs(self) -> None:
         self.directory_tabs.clear()
         self.directory_tables = {}
-        for directory in self._app_config.directories:
+        for directory in self._directories():
             table = self._make_directory_table()
             self.directory_tables[directory.path] = table
             self.directory_tabs.addTab(table, directory.path)
-        if not self._app_config.directories:
+        if not self._directories():
             self._show_neutral(
-                "No hay directorios configurados. Abra «Configurar directorios».", DIRECTORY_CONTEXT
+                "No hay directorios configurados para este servidor. "
+                "Abra «Configurar directorios».", DIRECTORY_CONTEXT
             )
 
     def _show_config_error(self, message: str) -> None:
@@ -577,11 +594,19 @@ class MainWindow(QMainWindow):
     def _open_directory_config(self) -> None:
         if self.busy or self._closing or self._config_load_error:
             return
-        dialog = DirectoryConfigDialog(self._app_config.directories, self)
+        server = self._current_server()
+        current = [directory for directory in self._app_config.directories
+                   if directory.server == server]
+        dialog = DirectoryConfigDialog(current, self)
         if dialog.exec() != QDialog.DialogCode.Accepted:
             return
-        directories = dialog.directories() or []
-        if not self._store_config(replace(self._app_config, directories=tuple(directories))):
+        # La lista devuelta se asocia al servidor activo; la de otros servidores
+        # se conserva intacta.
+        updated = [replace(directory, server=server)
+                   for directory in (dialog.directories() or [])]
+        others = [directory for directory in self._app_config.directories
+                  if directory.server != server]
+        if not self._store_config(replace(self._app_config, directories=tuple(others + updated))):
             return
         self._directory_cache.clear()
         self._rebuild_directory_tabs()
@@ -669,6 +694,8 @@ class MainWindow(QMainWindow):
         ))
         self._reset_connection()
         self._persist_url(text)
+        self._rebuild_directory_tabs()
+        self._restore_column_widths()
         self._set_busy(self.busy)
         if self.busy:
             self.cancel_query()
@@ -786,10 +813,11 @@ class MainWindow(QMainWindow):
         except ValueError as exc:
             self._show_error(str(exc), DIRECTORY_CONTEXT)
             return
-        paths = [directory.path for directory in self._app_config.directories]
+        paths = [directory.path for directory in self._directories()]
         if not paths:
             self._show_error(
-                "No hay directorios configurados. Abra «Configurar directorios».", DIRECTORY_CONTEXT
+                "No hay directorios configurados para este servidor. "
+                "Abra «Configurar directorios».", DIRECTORY_CONTEXT
             )
             return
         items = [
@@ -867,6 +895,8 @@ class MainWindow(QMainWindow):
         if (url != self.url_edit.text() or mode == "offline"
                 or self._setup_capabilities is not None):
             self._reset_connection()
+        self._rebuild_directory_tabs()
+        self._restore_column_widths()
         if (self._setup_client is not None and self._setup_capabilities is not None
                 and mode != "offline" and self._setup_client.base_url == url):
             self._client = self._setup_client
@@ -907,7 +937,7 @@ class MainWindow(QMainWindow):
             lambda client: client.torrents_info(include_files=False),
             "Consultando torrents (solo lectura)…",
         )]
-        for directory in self._app_config.directories:
+        for directory in self._directories():
             path = directory.path
             items.append((
                 f"directory:{path}",

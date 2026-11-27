@@ -635,5 +635,42 @@ class LocalReviewTests(unittest.TestCase):
             self.assertFalse(table.item(0, column).flags() & Qt.ItemIsEditable)
 
 
+    def test_imported_records_are_stamped_with_the_active_server(self):
+        source = self.root / "DEMO.Serie.S02E01.torrent"
+        make_torrent(source)
+        window = self.window()
+        window.url_edit.setText("http://servidor-a")
+        window.import_files([str(source)])
+        self.assertEqual(window.local_group._records[0].server, "http://servidor-a")
+
+    def test_destinations_are_not_reused_across_servers(self):
+        source = self.root / "DEMO.Serie.S02E01.torrent"
+        make_torrent(source)
+        window = self.window()
+        window.url_edit.setText("http://servidor-a")
+        window._app_config = AppConfig(
+            base_url=window._app_config.base_url,
+            directories=(DirectoryConfig("/mnt/a", "Serie", "http://servidor-a"),),
+        )
+        window.import_files([str(source)])
+        combo = window.local_table.cellWidget(0, 5)
+        combo.setEditText("/mnt/a/serie-especifica")
+        combo.lineEdit().editingFinished.emit()
+        self.assertEqual(window.local_group._records[0].server, "http://servidor-a")
+        # Cambia de servidor: el destino anterior no debe ofrecerse.
+        window.url_edit.setText("http://servidor-b")
+        window._app_config = AppConfig(
+            base_url=window._app_config.base_url,
+            directories=(DirectoryConfig("/mnt/b", "Serie", "http://servidor-b"),),
+        )
+        other = self.root / "DEMO.Serie.S02E02.torrent"
+        make_torrent(other, byte=b"b")
+        window.import_files([str(other)])
+        combo_b = window.local_table.cellWidget(1, 5)
+        self.assertEqual(combo_b.currentText(), "/mnt/b")
+        choices = {combo_b.itemText(i) for i in range(combo_b.count())}
+        self.assertNotIn("/mnt/a/serie-especifica", choices)
+
+
 if __name__ == "__main__":
     unittest.main()

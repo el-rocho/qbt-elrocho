@@ -140,7 +140,7 @@ class CatalogFileTests(CatalogTempDir):
             version = conn.execute("PRAGMA user_version").fetchone()[0]
             columns = [row[1] for row in conn.execute("PRAGMA table_info(records)")]
 
-        self.assertEqual(version, 1)
+        self.assertEqual(version, 2)
         self.assertEqual(
             columns,
             [
@@ -155,8 +155,39 @@ class CatalogFileTests(CatalogTempDir):
                 "destination",
                 "included",
                 "error",
+                "server",
             ],
         )
+
+    def test_v1_catalog_is_migrated_preserving_records_with_empty_server(self):
+        path = self.dir / "v1.sqlite3"
+        with closing(sqlite3.connect(path)) as conn, conn:
+            conn.execute(
+                "CREATE TABLE records ("
+                " source TEXT PRIMARY KEY, info_hash_v1 TEXT, info_hash_v2 TEXT,"
+                " kind TEXT NOT NULL, title TEXT NOT NULL, season INTEGER,"
+                " quality TEXT, confidence TEXT NOT NULL, destination TEXT NOT NULL,"
+                " included INTEGER NOT NULL CHECK (included IN (0, 1)),"
+                " error TEXT NOT NULL DEFAULT '')"
+            )
+            conn.execute("PRAGMA user_version=1")
+            conn.execute(
+                "INSERT INTO records (source, info_hash_v1, kind, title, season,"
+                " quality, confidence, destination, included)"
+                " VALUES ('a.torrent', ?, 'Serie', 'Serie', 1, '1080p',"
+                " 'alta', '/destino', 1)",
+                ("a" * 40,),
+            )
+
+        catalog = Catalog(path)
+        self.addCleanup(catalog.close)
+        records = catalog.list_records()
+        self.assertEqual(len(records), 1)
+        self.assertEqual(records[0].server, "")
+        self.assertEqual(records[0].destination, "/destino")
+
+        with closing(sqlite3.connect(path)) as conn:
+            self.assertEqual(conn.execute("PRAGMA user_version").fetchone()[0], 2)
 
     def test_rejects_unknown_schema_version_without_rewriting(self):
         path = self.dir / "ajeno.sqlite3"
@@ -346,9 +377,11 @@ class ContractShapeTests(unittest.TestCase):
                 "destination",
                 "included",
                 "error",
+                "server",
             ],
         )
         self.assertEqual(LocalRecord.__dataclass_fields__["error"].default, "")
+        self.assertEqual(LocalRecord.__dataclass_fields__["server"].default, "")
         with self.assertRaises(AttributeError):
             record("a.torrent").title = "otro"
 

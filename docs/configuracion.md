@@ -168,8 +168,10 @@ si qBittorrent puede escribir. La aplicación no crea carpetas.
 
 Sin directorios configurados puede consultar torrents y revisar archivos. Los
 destinos del catálogo anterior siguen siendo candidatos; eliminar una raíz no
-borra los destinos de las filas. **Todavía no se separan por servidor**: revise
-los destinos manualmente si cambia de instalación.
+borra los destinos de las filas. Cada directorio y cada destino se asocian a la
+URL con la que se definieron: al cambiar de servidor solo se ofrecen y consultan
+los del servidor activo. Los destinos guardados con una versión anterior quedan
+«sin servidor» y no se ofrecen automáticamente hasta volver a elegirlos.
 
 ## Qué se conserva y cómo actualizar
 
@@ -186,15 +188,16 @@ es `~/.config/el-rocho/`; puede variar con el entorno. La ayuda emergente del bo
 muestra la ubicación del catálogo. En Windows use esas rutas efectivas, sin
 suponer un nombre de usuario ni una unidad concreta.
 
-La configuración JSON versión 1 se lee sin reescribirla al abrir. Si tenía URL
-válida, conserva el arranque automático y sus directorios, incluso si la lista
-está vacía. Al guardar un ajuste se escribe la versión 2 de forma atómica. Si la
-versión anterior no tenía URL, se solicita configuración: no se reconstruye una
-IP a partir de antiguos valores embebidos.
+La configuración JSON versión 1 y 2 se lee sin reescribirla al abrir. Si tenía
+URL válida, conserva el arranque automático y sus directorios, incluso si la
+lista está vacía; al guardar, esos directorios se asocian a la URL guardada.
+Al guardar un ajuste se escribe la versión 3 de forma atómica. Si la versión
+anterior no tenía URL, se solicita configuración: no se reconstruye una IP a
+partir de antiguos valores embebidos.
 
 Antes de actualizar o volver a una versión anterior, haga una copia de los tres
 archivos con la aplicación cerrada. Las versiones antiguas pueden no admitir
-el JSON versión 2: restaure la copia compatible, no cambie el número de versión
+el JSON versión 3: restaure la copia compatible, no cambie el número de versión
 a mano. No comparta su catálogo sin revisar rutas y metadatos personales.
 
 ## Si algo falla
@@ -219,8 +222,8 @@ a mano. No comparta su catálogo sin revisar rutas y metadatos personales.
   la petición. Cerrar la ventana también espera sin destruir el trabajador.
 
 En esta fase los lotes de consultas aún usan progreso modal y un aviso agregado
-al terminar. El progreso no modal, el almacén seguro opcional de credenciales,
-la importación de la carpeta del servidor y el aislamiento de destinos por
-servidor son fases posteriores, no funciones ya entregadas.
+al terminar. El progreso no modal, el almacén seguro opcional de credenciales y
+la importación de la carpeta del servidor son fases posteriores, no funciones ya
+entregadas. El aislamiento de destinos por servidor sí está implementado.
 
 [Volver al README](../README.md)

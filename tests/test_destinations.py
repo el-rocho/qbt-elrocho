@@ -5,12 +5,17 @@ from qbt.config import DirectoryConfig
 from qbt.destinations import candidate_destinations, normalize_title, propose_destination
 
 
-def rec(title, destination="", kind="Serie", season=None):
-    return SimpleNamespace(title=title, destination=destination, kind=kind, season=season)
+def rec(title, destination="", kind="Serie", season=None, server=""):
+    return SimpleNamespace(title=title, destination=destination, kind=kind, season=season,
+                           server=server)
 
 
 def dirs(*pairs):
     return [DirectoryConfig(path, kind) for path, kind in pairs]
+
+
+def server_dirs(server, *pairs):
+    return [DirectoryConfig(path, kind, server) for path, kind in pairs]
 
 
 class NormalizeTitleTests(unittest.TestCase):
@@ -105,6 +110,50 @@ class CandidateDestinationsTests(unittest.TestCase):
             prior,
         )
         self.assertEqual(result, ["/mnt/peliculas", "/mnt/general"])
+
+    def test_only_directories_and_prior_of_the_requested_server_are_offered(self):
+        prior = [
+            rec("A", "/mnt/a", kind="Serie", server="http://servidor-a"),
+            rec("B", "/mnt/b", kind="Serie", server="http://servidor-b"),
+        ]
+        directories = server_dirs(
+            "http://servidor-a", ("/mnt/a", "Serie")
+        ) + server_dirs(
+            "http://servidor-b", ("/mnt/b", "Serie")
+        )
+        result = candidate_destinations("Serie", directories, prior, server="http://servidor-a")
+        self.assertEqual(result, ["/mnt/a"])
+
+    def test_empty_server_matches_only_empty_server(self):
+        prior = [rec("A", "/mnt/a", kind="Serie", server="http://servidor-a")]
+        result = candidate_destinations(
+            "Serie", server_dirs("http://servidor-a", ("/mnt/a", "Serie")), prior, server=""
+        )
+        self.assertEqual(result, [])
+
+
+class ServerIsolationTests(unittest.TestCase):
+    def test_proposal_does_not_reuse_another_servers_destination(self):
+        prior = [rec("Tierra de Mafiosos", "/mnt/otro-servidor/mafiosos", server="http://servidor-b")]
+        result = propose_destination(
+            "Serie", "Tierra de Mafiosos",
+            server_dirs("http://servidor-a", ("/mnt/series", "Serie")),
+            prior, server="http://servidor-a",
+        )
+        self.assertEqual(result, "/mnt/series")
+
+    def test_prior_records_are_limited_to_the_requested_server(self):
+        prior = [
+            rec("Otra Serie", "/mnt/series/otra", server="http://servidor-a"),
+            rec("Otra Serie", "/mnt/series/otra-b", server="http://servidor-b"),
+        ]
+        result = propose_destination(
+            "Serie", "Nueva Serie",
+            server_dirs("http://servidor-a", ("/mnt/series", "Serie")),
+            prior, server="http://servidor-a",
+        )
+        # Solo cuenta el destino previo del servidor A: dos raíces → elige el usuario.
+        self.assertEqual(result, "")
 
 
 if __name__ == "__main__":

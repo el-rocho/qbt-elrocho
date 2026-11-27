@@ -16,29 +16,44 @@ def normalize_title(title: str) -> str:
     return text.casefold()
 
 
-def candidate_destinations(kind: str, directories, prior_records=()) -> list[str]:
-    """Destinos candidatos: directorios del tipo, respaldo y destinos previos del tipo."""
+def candidate_destinations(kind: str, directories, prior_records=(), server: str = "") -> list[str]:
+    """Destinos candidatos: directorios del tipo, respaldo y destinos previos del tipo.
+
+    Solo se consideran los directorios y registros asociados al servidor
+    ``server``; los de otro servidor (o «sin servidor») no se ofrecen.
+    """
     result = []
     for directory in directories:
+        if getattr(directory, "server", "") != server:
+            continue
         if directory.kind == kind and directory.path not in result:
             result.append(directory.path)
     for directory in directories:
+        if getattr(directory, "server", "") != server:
+            continue
         if directory.kind == "Sin determinar" and directory.path not in result:
             result.append(directory.path)
     for record in prior_records:
+        if getattr(record, "server", "") != server:
+            continue
         if record.kind == kind and record.destination and record.destination not in result:
             result.append(record.destination)
     return result
 
 
-def propose_destination(kind: str, title: str, directories, prior_records=(), dir_cache=None, season: int | None = None) -> str:
+def propose_destination(kind: str, title: str, directories, prior_records=(), dir_cache=None, season: int | None = None, server: str = "") -> str:
     """Propone un destino; devuelve '' cuando debe decidirlo el usuario.
 
     Orden: reutilizar el destino de un registro previo con el mismo título
     y temporada (solo series), después el de uno con el mismo título, después
     la carpeta ya existente (solo series), después el directorio del tipo
     concreto (varios → que elija el usuario) y, por último, el respaldo.
+    Los directorios y registros previos se limitan al servidor ``server``.
     """
+    directories = [directory for directory in directories
+                   if getattr(directory, "server", "") == server]
+    prior_records = [record for record in prior_records
+                     if getattr(record, "server", "") == server]
     normalized = normalize_title(title)
     # 1. Serie: reutilizar el destino de la misma serie y temporada.
     if kind == "Serie" and season is not None:

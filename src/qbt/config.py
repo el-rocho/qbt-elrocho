@@ -14,7 +14,7 @@ import tempfile
 from dataclasses import dataclass, replace
 from pathlib import Path, PureWindowsPath
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 # Tipos de directorio. "Sin determinar" actúa como comodín (respaldo): un
 # directorio donde el usuario guarda archivos de cualquier tipo.
@@ -25,10 +25,21 @@ class ConfigError(ValueError):
     """Configuración ilegible, incompatible o con datos inválidos."""
 
 
+def normalize_server(value: str) -> str:
+    """Identidad de servidor normalizada: sin espacios ni barra final.
+
+    La misma cadena se usa como clave en la configuración (``server`` de cada
+    directorio) y en el catálogo, de modo que un destino solo se ofrece para el
+    servidor al que se asoció. Vacío significa «sin servidor» (sin conexión).
+    """
+    return (value or "").strip().rstrip("/")
+
+
 @dataclass(frozen=True)
 class DirectoryConfig:
     path: str
     kind: str
+    server: str = ""
 
 
 @dataclass(frozen=True)
@@ -47,7 +58,7 @@ def _is_absolute_path(value: str) -> bool:
     return value.startswith("/") or PureWindowsPath(value).is_absolute()
 
 
-def _validate_directory(path: object, kind: object) -> DirectoryConfig:
+def _validate_directory(path: object, kind: object, server: object = "") -> DirectoryConfig:
     if not isinstance(path, str):
         raise ConfigError("La ruta del directorio debe ser texto")
     if any(ord(char) < 32 for char in path):
@@ -63,20 +74,26 @@ def _validate_directory(path: object, kind: object) -> DirectoryConfig:
             f"Tipo de directorio no válido: {kind!r}. "
             f"Use uno de {', '.join(DIRECTORY_KINDS)}."
         )
-    return DirectoryConfig(path, kind)
+    if not isinstance(server, str):
+        raise ConfigError("El servidor del directorio debe ser texto")
+    if any(ord(char) < 32 for char in server):
+        raise ConfigError("El servidor del directorio no puede contener caracteres de control")
+    server = normalize_server(server)
+    return DirectoryConfig(path, kind, server)
 
 
 def validate_directories(directories) -> tuple[DirectoryConfig, ...]:
     """Valida y normaliza una lista de directorios; lanza ConfigError si es inválida."""
-    seen: set[str] = set()
+    seen: set[tuple[str, str]] = set()
     result = []
     for directory in directories:
         if not isinstance(directory, DirectoryConfig):
             raise ConfigError("Cada directorio debe ser de tipo DirectoryConfig")
-        directory = _validate_directory(directory.path, directory.kind)
-        if directory.path in seen:
+        directory = _validate_directory(directory.path, directory.kind, directory.server)
+        key = (directory.server, directory.path)
+        if key in seen:
             raise ConfigError(f"Directorio duplicado: {directory.path}")
-        seen.add(directory.path)
+        seen.add(key)
         result.append(directory)
     return tuple(result)
 
@@ -114,7 +131,7 @@ def load(path: str | Path) -> AppConfig:
     if not isinstance(data, dict):
         raise ConfigError("La configuración debe ser un objeto JSON")
     version = data.get("version")
-    if type(version) is not int or version not in (1, SCHEMA_VERSION):
+    if type(version) is not int or version not in (1, 2, SCHEMA_VERSION):
         raise ConfigError(
             f"Versión de configuración desconocida: {version!r} "
             f"(se esperaba {SCHEMA_VERSION}); no se modifica el archivo"
@@ -127,7 +144,11 @@ def load(path: str | Path) -> AppConfig:
     for entry in directories:
         if not isinstance(entry, dict):
             raise ConfigError("Cada directorio debe ser un objeto JSON")
-        raw_directories.append(DirectoryConfig(entry.get("path", ""), entry.get("kind", "")))
+        # En v1 y v2 la lista era única para la URL guardada; se asocia a ella.
+        server = entry.get("server", "") if version == SCHEMA_VERSION else base_url
+        raw_directories.append(
+            DirectoryConfig(entry.get("path", ""), entry.get("kind", ""), server)
+        )
     options = (
         {"connection_mode": "remote", "setup_completed": bool(base_url), "query_on_startup": True}
         if version == 1 else
@@ -153,7 +174,7 @@ def save(config: AppConfig, path: str | Path) -> None:
         "setup_completed": validated.setup_completed,
         "query_on_startup": validated.query_on_startup,
         "directories": [
-            {"path": directory.path, "kind": directory.kind}
+            {"path": directory.path, "kind": directory.kind, "server": directory.server}
             for directory in validated.directories
         ],
     }

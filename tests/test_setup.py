@@ -164,7 +164,10 @@ class SetupTests(unittest.TestCase):
         saved = load(self.path)
         self.assertFalse(saved.query_on_startup)
         self.assertTrue(saved.setup_completed)
-        self.assertEqual(saved.directories, (DirectoryConfig("/library", "Libro"),))
+        self.assertEqual(
+            saved.directories,
+            (DirectoryConfig("/library", "Libro", "http://localhost:9090"),),
+        )
         window.close()
         reopened = self.window()
         with mock.patch("qbt.app.QBittorrentClient") as client:

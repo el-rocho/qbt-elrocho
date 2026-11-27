@@ -37,7 +37,8 @@ Para los directorios de Windows, copie la ruta completa de una carpeta existente
 desde el Explorador (Ctrl+L), sin comillas; por ejemplo,
 `C:\Users\Ana\Downloads`, si esa es su ubicación real. El nombre visible «Descargas»
 no permite deducir la ruta; `C:\Descargas` solo sirve si existe esa carpeta.
-Aún no hay importación de carpetas ni aislamiento de destinos por servidor.
+Aún no hay importación de la raíz del servidor; los directorios y los destinos
+se asocian al servidor donde se definieron y no se mezclan entre instalaciones.
 
 ## Interfaz
 
@@ -161,10 +162,13 @@ los destinos de las filas revisadas.
   El tipo «Otros» agrupa lo que no es película, serie ni libro; un directorio
   «Sin determinar» actúa como respaldo cuando no hay uno del tipo concreto.
   Borrar los directorios no elimina las propuestas procedentes del catálogo.
-  **Límite pendiente:** los destinos previos aún no están asociados a un servidor;
-  al cambiar de instalación, revíselos antes de utilizarlos. La
-  aplicación no añade subcarpetas de serie/temporada: la estructura del torrent
-  y la configuración del servidor siguen mandando.
+  **Aislamiento por servidor:** cada directorio configurado y cada destino
+  guardado se asocia a la URL del servidor con la que se definió; al cambiar de
+  instalación solo se ofrecen y consultan los del servidor activo. Los destinos
+  guardados con una versión anterior quedan «sin servidor» y no se ofrecen
+  automáticamente hasta volver a elegirlos. La aplicación no añade subcarpetas
+  de serie/temporada: la estructura del torrent y la configuración del servidor
+  siguen mandando.
 - **Identidad exacta:** calcula el infohash sobre los bytes originales del
   diccionario `info`: SHA1 en v1, SHA256 en v2 y ambas identidades en híbridos.
   Archivos con distinto nombre pero la misma identidad son duplicados. La

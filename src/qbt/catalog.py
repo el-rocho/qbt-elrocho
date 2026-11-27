@@ -6,7 +6,7 @@ import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 _SCHEMA = """
 CREATE TABLE records (
@@ -20,7 +20,8 @@ CREATE TABLE records (
     confidence    TEXT NOT NULL,
     destination   TEXT NOT NULL,
     included      INTEGER NOT NULL CHECK (included IN (0, 1)),
-    error         TEXT NOT NULL DEFAULT ''
+    error         TEXT NOT NULL DEFAULT '',
+    server        TEXT NOT NULL DEFAULT ''
 )
 """
 
@@ -36,6 +37,7 @@ _COLUMN_LIST = (
     "destination",
     "included",
     "error",
+    "server",
 )
 _COLUMNS = ", ".join(_COLUMN_LIST)
 _PLACEHOLDERS = ", ".join("?" for _ in _COLUMN_LIST)
@@ -61,6 +63,7 @@ class LocalRecord:
     destination: str
     included: bool
     error: str = ""
+    server: str = ""
 
 
 def _is_memory(path: str) -> bool:
@@ -86,7 +89,7 @@ def _validate_hash(name: str, value: str | None) -> None:
 def _validate_record(record: LocalRecord) -> None:
     if not isinstance(record, LocalRecord):
         raise CatalogError("save() espera una instancia de LocalRecord")
-    for name in ("source", "kind", "title", "confidence", "destination", "error"):
+    for name in ("source", "kind", "title", "confidence", "destination", "error", "server"):
         if not isinstance(getattr(record, name), str):
             raise CatalogError(f"El campo {name} debe ser texto")
     if not record.source:
@@ -143,13 +146,21 @@ class Catalog:
             version = self._conn.execute("PRAGMA user_version").fetchone()[0]
             if version == SCHEMA_VERSION:
                 return
-            if version != 0:
+            if version not in (0, 1):
                 raise CatalogError(
                     f"Versión de esquema desconocida: {version} "
                     f"(se esperaba {SCHEMA_VERSION}); no se modifica el catálogo"
                 )
             with self._conn:
-                self._conn.execute(_SCHEMA)
+                if version == 0:
+                    self._conn.execute(_SCHEMA)
+                else:
+                    # v1 → v2: se añade la asociación al servidor; los destinos
+                    # anteriores quedan «sin servidor» (cadena vacía) y no se
+                    # ofrecen automáticamente hasta volver a elegirlos.
+                    self._conn.execute(
+                        "ALTER TABLE records ADD COLUMN server TEXT NOT NULL DEFAULT ''"
+                    )
                 self._conn.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
         except CatalogError:
             self._discard()
@@ -179,6 +190,7 @@ class Catalog:
                 destination=row["destination"],
                 included=bool(row["included"]),
                 error=row["error"],
+                server=row["server"],
             )
             for row in rows
         ]
@@ -203,6 +215,7 @@ class Catalog:
             record.destination,
             int(record.included),
             record.error,
+            record.server,
         )
         try:
             with self._conn:

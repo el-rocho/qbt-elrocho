@@ -26,10 +26,11 @@ def _valid_destination(value: str) -> bool:
 
 
 class LocalReviewPanel(QGroupBox):
-    def __init__(self, settings, directories, dir_cache, catalog_path=None) -> None:
+    def __init__(self, settings, directories, dir_cache, catalog_path=None, server=None) -> None:
         super().__init__("Revisión local — catálogo y destinos (sin envío)")
         self._directories = directories
         self._dir_cache = dir_cache
+        self._server = server if server is not None else (lambda: "")
         self._rendering = False
         self._last_save_error: str | None = None
         self._records: list[LocalRecord] = []
@@ -132,12 +133,13 @@ class LocalReviewPanel(QGroupBox):
         self.import_files(files)
 
     def _destination_options(self, kind: str) -> list[str]:
-        options = candidate_destinations(kind, self._directories(), self._records)
+        options = candidate_destinations(kind, self._directories(), self._records, self._server())
         return [option for option in options if _valid_destination(option)]
 
     def _proposed_destination(self, kind: str, title: str, season: int | None = None) -> str:
         return propose_destination(
-            kind, title, self._directories(), self._records, self._dir_cache(), season
+            kind, title, self._directories(), self._records, self._dir_cache(), season,
+            self._server(),
         )
 
     def import_files(self, files: list[str]) -> None:
@@ -171,7 +173,8 @@ class LocalReviewPanel(QGroupBox):
             destination = self._proposed_destination(proposal.kind, proposal.title, proposal.season)
             record = LocalRecord(source, v1, v2, proposal.kind, proposal.title,
                                  proposal.season, proposal.quality, proposal.confidence,
-                                 destination, not error and previous is None, error)
+                                 destination, not error and previous is None, error,
+                                 server=self._server())
             exact, _similar = find_matches(v1, v2, record.title,
                                             [asdict(r) for r in self._records if r.source != source]
                                             + (self._remote_torrents or []))
@@ -294,12 +297,17 @@ class LocalReviewPanel(QGroupBox):
             new_kind = changes.get("kind", record.kind)
             new_season = changes.get("season", record.season)
             old_proposal = propose_destination(
-                record.kind, record.title, self._directories(), prior, self._dir_cache(), record.season
+                record.kind, record.title, self._directories(), prior, self._dir_cache(),
+                record.season, self._server(),
             )
             if not record.destination or record.destination == old_proposal:
                 changes["destination"] = propose_destination(
-                    new_kind, record.title, self._directories(), prior, self._dir_cache(), new_season
+                    new_kind, record.title, self._directories(), prior, self._dir_cache(),
+                    new_season, self._server(),
                 )
+        if "destination" in changes:
+            # El destino queda asociado al servidor para el que se elige.
+            changes["server"] = self._server()
         self._save(replace(record, **changes))
         self._render()
 

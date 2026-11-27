@@ -37,7 +37,7 @@ DEFAULT_PATHS = ("/library/movies", "/library/series", "/library/books")
 
 def seed_config(path, url=DEFAULT_URL):
     save_config(AppConfig(base_url=url, directories=tuple(
-        DirectoryConfig(path, kind) for path, kind in
+        DirectoryConfig(path, kind, url) for path, kind in
         zip(DEFAULT_PATHS, ("Película", "Serie", "Libro"))
     ), setup_completed=True), path)
 
@@ -124,7 +124,10 @@ def window_tables(window: MainWindow) -> dict[str, object]:
     # Las pruebas de geometría necesitan una tabla de directorio explícita.
     if not window.directory_tables:
         from dataclasses import replace
-        window._app_config = replace(window._app_config, directories=(DirectoryConfig("/library", "Otros"),))
+        server = window._app_config.base_url
+        window._app_config = replace(
+            window._app_config, directories=(DirectoryConfig("/library", "Otros", server),)
+        )
         window._rebuild_directory_tabs()
         window._restore_column_widths()
     return {
@@ -292,8 +295,10 @@ class MainWindowTests(unittest.TestCase):
         )
 
     def set_directories(self, directories):
+        server = self.window._app_config.base_url
         self.window._app_config = AppConfig(
-            base_url=self.window._app_config.base_url, directories=tuple(directories),
+            base_url=server,
+            directories=tuple(DirectoryConfig(d.path, d.kind, server) for d in directories),
             setup_completed=True,
         )
         self.window._rebuild_directory_tabs()
@@ -720,9 +725,10 @@ class MainWindowTests(unittest.TestCase):
         self.assertIn("2 torrent", self.window.torrents_status_label.text())
         self.window.url_edit.setText("http://127.0.0.1:1")
         self.assertEqual(self.window.torrents_table.rowCount(), 0)
-        self.assertEqual(next(iter(self.window.directory_tables.values())).rowCount(), 0)
+        # Los directorios son por servidor: el nuevo no tiene ninguno configurado.
+        self.assertEqual(self.window.directory_tables, {})
         self.assertEqual(self.window.torrents_status_label.text(), IDLE_TORRENTS_TEXT)
-        self.assertEqual(self.window.directory_status_label.text(), IDLE_DIRECTORY_TEXT)
+        self.assertIn("No hay directorios", self.window.directory_status_label.text())
         self.assertIn("descart", self.window.connection_label.text().lower())
 
     def test_version_query_shows_busy_state_and_result(self):
@@ -922,7 +928,8 @@ class MainWindowTests(unittest.TestCase):
         self.assertEqual(self.window.directory_tables[path].rowCount(), 1)
         self.window.url_edit.setText("http://127.0.0.1:1")
         self.assertEqual(self.window.torrents_table.rowCount(), 0)
-        self.assertEqual(self.window.directory_tables[path].rowCount(), 0)
+        # El servidor nuevo no tiene directorios: su pestaña desaparece.
+        self.assertNotIn(path, self.window.directory_tables)
         self.assertIn("descart", self.window.connection_label.text().lower())
 
     def test_close_while_worker_active_defers_without_blocking(self):

@@ -278,7 +278,7 @@ class AuthUiTests(unittest.TestCase):
         self.login()
         self.dialog.save_button.click()
         self.window._app_config = replace(
-            self.window._app_config, directories=(DirectoryConfig("/library", "Libro"),)
+            self.window._app_config, directories=(DirectoryConfig("/library", "Libro", self.url),)
         )
         self.window._rebuild_directory_tabs()
         before = len(self.server.requests)

@@ -57,11 +57,32 @@ class ConfigFileTests(ConfigTempDir):
         self.assertTrue(loaded.query_on_startup)
         self.assertEqual(loaded.connection_mode, "remote")
         self.assertEqual(loaded.base_url, "http://existing:9090")
-        self.assertEqual(loaded.directories, (directory("/library", "Libro"),))
+        self.assertEqual(
+            loaded.directories, (DirectoryConfig("/library", "Libro", "http://existing:9090"),)
+        )
         self.assertEqual(path.read_text(encoding="utf-8"), original)
         save(loaded, path)
-        self.assertEqual(json.loads(path.read_text(encoding="utf-8"))["version"], 2)
+        self.assertEqual(json.loads(path.read_text(encoding="utf-8"))["version"], 3)
         self.assertEqual(load(path), loaded)
+
+    def test_v2_config_associates_existing_directories_with_base_url(self):
+        path = self.dir / "v2.json"
+        path.write_text(
+            json.dumps({
+                "version": 2,
+                "base_url": "http://servidor:8080",
+                "connection_mode": "remote",
+                "setup_completed": True,
+                "query_on_startup": True,
+                "directories": [{"path": "/library", "kind": "Libro"}],
+            }),
+            encoding="utf-8",
+        )
+        loaded = load(path)
+        self.assertEqual(
+            loaded.directories,
+            (DirectoryConfig("/library", "Libro", "http://servidor:8080"),),
+        )
 
     def test_missing_file_loads_default(self):
         self.assertEqual(load(self.dir / "inexistente.json"), AppConfig())
@@ -171,7 +192,10 @@ class ConfigFileTests(ConfigTempDir):
             encoding="utf-8",
         )
 
-        self.assertEqual(load(path).directories, (directory("/mnt/descargas", "Película"),))
+        self.assertEqual(
+            load(path).directories,
+            (DirectoryConfig("/mnt/descargas", "Película", "http://x"),),
+        )
 
 
 class ConfigValidationTests(unittest.TestCase):
@@ -248,7 +272,8 @@ class ContractShapeTests(unittest.TestCase):
             config().base_url = "otra"
 
     def test_directory_config_field_order_and_immutability(self):
-        self.assertEqual(list(DirectoryConfig.__dataclass_fields__), ["path", "kind"])
+        self.assertEqual(list(DirectoryConfig.__dataclass_fields__), ["path", "kind", "server"])
+        self.assertEqual(DirectoryConfig.__dataclass_fields__["server"].default, "")
         with self.assertRaises(AttributeError):
             directory().path = "otra"
 
