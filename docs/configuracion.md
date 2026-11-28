@@ -39,11 +39,15 @@ batería automática en Windows ni otros entornos. Aún no se distribuyen instal
 
 ## Primer inicio
 
-La aplicación abre el diálogo **Configurar qBittorrent**. No se realiza ninguna
-petición de red ni se crean directorios de descarga al abrirlo.
+La aplicación abre el diálogo **Configurar qBittorrent** y arranca en modo
+**Continuar sin conexión**. No se realiza ninguna petición de red ni se crean
+directorios de descarga al abrirlo; los botones de consulta remota quedan
+deshabilitados hasta que confirme una conexión.
 
 1. Elija **En este ordenador**, **En otro ordenador o contenedor** o
-   **Continuar sin conexión**.
+   **Continuar sin conexión**. En una instalación nueva el modo preseleccionado
+   es **Continuar sin conexión**; para conectar, seleccione una de las otras
+   opciones.
 2. Para una conexión, escriba la URL de la **WebUI**, no una ruta de archivos ni
    un enlace de un torrent. Incluya `http://` o `https://` y el puerto que haya
    configurado en qBittorrent. La sugerencia local `http://localhost:8080` no es

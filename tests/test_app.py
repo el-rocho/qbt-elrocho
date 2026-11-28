@@ -39,7 +39,7 @@ def seed_config(path, url=DEFAULT_URL):
     save_config(AppConfig(base_url=url, directories=tuple(
         DirectoryConfig(path, kind, url) for path, kind in
         zip(DEFAULT_PATHS, ("Película", "Serie", "Libro"))
-    ), setup_completed=True), path)
+    ), connection_mode="local", setup_completed=True), path)
 
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -124,7 +124,7 @@ def window_tables(window: MainWindow) -> dict[str, object]:
     # Las pruebas de geometría necesitan una tabla de directorio explícita.
     if not window.directory_tables:
         from dataclasses import replace
-        server = window._app_config.base_url
+        server = window._current_server()
         window._app_config = replace(
             window._app_config, directories=(DirectoryConfig("/library", "Otros", server),)
         )
@@ -295,11 +295,11 @@ class MainWindowTests(unittest.TestCase):
         )
 
     def set_directories(self, directories):
+        from dataclasses import replace
         server = self.window._app_config.base_url
-        self.window._app_config = AppConfig(
-            base_url=server,
+        self.window._app_config = replace(
+            self.window._app_config,
             directories=tuple(DirectoryConfig(d.path, d.kind, server) for d in directories),
-            setup_completed=True,
         )
         self.window._rebuild_directory_tabs()
         self.window._restore_column_widths()
@@ -1200,10 +1200,12 @@ class MainWindowTests(unittest.TestCase):
     def test_deferred_close_with_save_failure_still_closes(self):
         # Cierre diferido (consulta en curso) + fallo al guardar: el aviso no
         # puede dejar la ventana abierta ni _closing colgado para siempre.
+        from dataclasses import replace
         root = tempfile.mkdtemp(dir=self.prefs.name)
         QSettings.setPath(QSettings.Format.IniFormat, QSettings.Scope.UserScope, root)
         os.makedirs(settings_file(root))
         window = MainWindow()
+        window._app_config = replace(window._app_config, connection_mode="local")
         window.show()
         window.url_edit.setText(self.base_url)
         apply_widths(window, self.CUSTOM_WIDTHS)

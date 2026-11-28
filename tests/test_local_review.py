@@ -1,6 +1,7 @@
 import os
 import tempfile
 import unittest
+from dataclasses import replace
 from unittest import mock
 from pathlib import Path
 
@@ -40,7 +41,7 @@ class LocalReviewTests(unittest.TestCase):
         save_config(AppConfig(directories=tuple(
             DirectoryConfig(path, kind) for path, kind in
             zip(DEFAULT_PATHS, ("Película", "Serie", "Libro"))
-        )), self.root / "widths.json")
+        ), connection_mode="local"), self.root / "widths.json")
 
     def window(self):
         settings = QSettings(str(self.root / "widths.ini"), QSettings.Format.IniFormat)
@@ -109,8 +110,8 @@ class LocalReviewTests(unittest.TestCase):
 
     def test_editing_season_reproposes_destination_for_series(self):
         window = self.window()
-        window._app_config = AppConfig(
-            base_url=window._app_config.base_url,
+        window._app_config = replace(
+            window._app_config,
             directories=(DirectoryConfig("/mnt/a", "Serie"), DirectoryConfig("/mnt/b", "Serie")),
         )
         # Dos registros de la misma serie en temporadas y destinos distintos.
@@ -271,8 +272,8 @@ class LocalReviewTests(unittest.TestCase):
         make_torrent(source)
         window = self.window()
         # Sin raíz de series configurada: no se propone ningún destino.
-        window._app_config = AppConfig(
-            base_url=window._app_config.base_url,
+        window._app_config = replace(
+            window._app_config,
             directories=(DirectoryConfig("/mnt/descargas/peliculas", "Película"),),
         )
         window.import_files([str(source)])
@@ -286,8 +287,8 @@ class LocalReviewTests(unittest.TestCase):
         source = self.root / "DEMO.Documental.torrent"
         make_torrent(source, name="DEMO Documental")
         window = self.window()
-        window._app_config = AppConfig(
-            base_url=window._app_config.base_url,
+        window._app_config = replace(
+            window._app_config,
             directories=(DirectoryConfig("/mnt/otros", "Otros"),),
         )
         window.import_files([str(source)])
@@ -650,8 +651,8 @@ class LocalReviewTests(unittest.TestCase):
         make_torrent(source)
         window = self.window()
         window.url_edit.setText("http://servidor-a")
-        window._app_config = AppConfig(
-            base_url=window._app_config.base_url,
+        window._app_config = replace(
+            window._app_config,
             directories=(DirectoryConfig("/mnt/a", "Serie", "http://servidor-a"),),
         )
         window.import_files([str(source)])
@@ -661,8 +662,8 @@ class LocalReviewTests(unittest.TestCase):
         self.assertEqual(window.local_group._records[0].server, "http://servidor-a")
         # Cambia de servidor: el destino anterior no debe ofrecerse.
         window.url_edit.setText("http://servidor-b")
-        window._app_config = AppConfig(
-            base_url=window._app_config.base_url,
+        window._app_config = replace(
+            window._app_config,
             directories=(DirectoryConfig("/mnt/b", "Serie", "http://servidor-b"),),
         )
         other = self.root / "DEMO.Serie.S02E02.torrent"

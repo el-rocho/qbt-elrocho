@@ -101,6 +101,7 @@ class AuthUiTests(unittest.TestCase):
         )
         self.window._open_connection_config()
         self.dialog = self.window._setup_dialog
+        self.dialog.mode_combo.setCurrentIndex(self.dialog.mode_combo.findData("remote"))
 
     def tearDown(self):
         self.window.close()
@@ -146,8 +147,10 @@ class AuthUiTests(unittest.TestCase):
                 self.assertNotIn(secret, data, path.name)
 
     def test_known_unsupported_functions_are_disabled_and_not_requested(self):
+        from dataclasses import replace
         from types import SimpleNamespace
         self.dialog.reject()
+        self.window._app_config = replace(self.window._app_config, connection_mode="local")
         self.window.url_edit.setText(self.url)
         self.window._capabilities = SimpleNamespace(torrents=True, directories=False)
         self.window._set_busy(False)

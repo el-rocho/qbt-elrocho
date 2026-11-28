@@ -46,7 +46,7 @@ class DirectoryConfig:
 class AppConfig:
     base_url: str = ""
     directories: tuple[DirectoryConfig, ...] = ()
-    connection_mode: str = "local"
+    connection_mode: str = "offline"
     setup_completed: bool = False
     query_on_startup: bool = True
 
@@ -152,7 +152,7 @@ def load(path: str | Path) -> AppConfig:
     options = (
         {"connection_mode": "remote", "setup_completed": bool(base_url), "query_on_startup": True}
         if version == 1 else
-        {"connection_mode": data.get("connection_mode", "local"),
+        {"connection_mode": data.get("connection_mode", "offline"),
          "setup_completed": data.get("setup_completed", False),
          "query_on_startup": data.get("query_on_startup", True)}
     )

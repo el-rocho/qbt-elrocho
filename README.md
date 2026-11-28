@@ -22,7 +22,8 @@ Consulte la [guía de configuración](docs/configuracion.md): instalación, prim
 inicio, URL, directorios, almacenamiento y recuperación de errores.
 
 **Configuración y autenticación:** las instalaciones nuevas no incluyen ningún
-servidor ni directorio personal. Configuración permite elegir instalación local,
+servidor ni directorio personal y arrancan en modo **sin conexión**. Configuración
+permite elegir instalación local,
 remota o trabajo sin conexión, iniciar una sesión propia con usuario y contraseña
 y comprobar las versiones de qBittorrent y Web API. Los servidores que permiten
 acceso sin credenciales siguen funcionando. Contraseña y cookies no se escriben

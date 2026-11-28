@@ -62,6 +62,7 @@ class SetupTests(unittest.TestCase):
     def test_fresh_start_has_no_server_no_directories_and_no_network(self):
         window = self.window()
         self.assertEqual(window.url_edit.text(), "")
+        self.assertEqual(window._app_config.connection_mode, "offline")
         self.assertEqual(window._app_config.directories, ())
         self.assertEqual(window.directory_tabs.count(), 0)
         self.assertEqual(window.connection_config_button.toolTip(), str(self.path))
@@ -70,9 +71,19 @@ class SetupTests(unittest.TestCase):
         client.assert_not_called()
         self.assertIsNotNone(window._setup_dialog)
         self.assertTrue(window._setup_dialog.isVisible())
-        self.assertEqual(window._setup_dialog.url_edit.text(), "http://localhost:8080")
+        self.assertEqual(window._setup_dialog.mode_combo.currentData(), "offline")
+        self.assertEqual(window._setup_dialog.url_edit.text(), "")
         self.assertFalse(self.path.exists())
         window._setup_dialog.reject()
+        self.assertTrue(window.local_group.isEnabled())
+
+    def test_first_run_defaults_to_offline_mode(self):
+        window = self.window()
+        self.assertEqual(window._app_config.connection_mode, "offline")
+        self.assertFalse(window.url_edit.isEnabled())
+        self.assertFalse(window.version_button.isEnabled())
+        self.assertFalse(window.torrents_button.isEnabled())
+        self.assertFalse(window.directory_button.isEnabled())
         self.assertTrue(window.local_group.isEnabled())
 
     def test_offline_choice_is_saved_and_reopens_without_network_or_welcome(self):
@@ -138,6 +149,7 @@ class SetupTests(unittest.TestCase):
         window = self.window()
         window.startup_query()
         dialog = window._setup_dialog
+        dialog.mode_combo.setCurrentIndex(dialog.mode_combo.findData("local"))
         dialog.url_edit.setText("http://localhost:8080\t")
         dialog.save_button.click()
         self.assertFalse(self.path.exists())
@@ -148,6 +160,8 @@ class SetupTests(unittest.TestCase):
         window = self.window()
         window.startup_query()
         dialog = window._setup_dialog
+        dialog.mode_combo.setCurrentIndex(dialog.mode_combo.findData("local"))
+        dialog.url_edit.setText("http://localhost:8080")
         dialog.startup_check.setChecked(False)
         dialog.save_button.click()
         saved = load(self.path)
