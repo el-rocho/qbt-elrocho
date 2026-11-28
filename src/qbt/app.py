@@ -889,6 +889,12 @@ class MainWindow(QMainWindow):
             return
         updated = replace(self._app_config, base_url=url, connection_mode=mode,
                           setup_completed=True, query_on_startup=dialog.startup_check.isChecked())
+        # El valor ajustado se recuerda como defecto de ese modo, para que
+        # reaparezca la próxima vez que se elija.
+        if mode == "local":
+            updated = replace(updated, local_url=url)
+        elif mode == "remote":
+            updated = replace(updated, remote_url=url)
         if not self._store_config(updated):
             dialog.status_label.setText(self.config_status_label.text())
             return

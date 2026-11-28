@@ -40,18 +40,20 @@ batería automática en Windows ni otros entornos. Aún no se distribuyen instal
 ## Primer inicio
 
 La aplicación abre el diálogo **Configurar qBittorrent** y arranca en modo
-**Continuar sin conexión**. No se realiza ninguna petición de red ni se crean
+**Sin conexión**. No se realiza ninguna petición de red ni se crean
 directorios de descarga al abrirlo; los botones de consulta remota quedan
 deshabilitados hasta que confirme una conexión.
 
-1. Elija **En este ordenador**, **En otro ordenador o contenedor** o
-   **Continuar sin conexión**. En una instalación nueva el modo preseleccionado
-   es **Continuar sin conexión**; para conectar, seleccione una de las otras
-   opciones.
+1. Elija **Sin conexión**, **En este ordenador** o **En otro ordenador o
+   contenedor**. En una instalación nueva el modo preseleccionado es
+   **Sin conexión**; para conectar, seleccione una de las otras opciones.
 2. Para una conexión, escriba la URL de la **WebUI**, no una ruta de archivos ni
    un enlace de un torrent. Incluya `http://` o `https://` y el puerto que haya
-   configurado en qBittorrent. La sugerencia local `http://localhost:8080` no es
-   una dirección detectada ni una garantía de que el servicio esté disponible.
+   configurado en qBittorrent. Las direcciones prellenadas —`http://127.0.0.1:8080`
+   para este ordenador y `http://192.168.0.X:8080` para otro equipo— son solo
+   sugerencias: no son direcciones detectadas ni garantizan que el servicio esté
+   disponible. En otro equipo, sustituya la X de `192.168.0.X` por la dirección
+   real del ordenador o contenedor.
 3. **Probar conexión** consulta únicamente la versión, sin guardar el borrador
    ni consultar torrents o directorios. Un resultado correcto comprueba ese
    endpoint, no todas las funciones ni los permisos sobre las carpetas.
@@ -61,9 +63,14 @@ deshabilitados hasta que confirme una conexión.
 
 **Configurar más tarde**, Esc y el aspa cierran el diálogo sin guardar. Puede
 seguir revisando archivos locales; si no completó la configuración, la bienvenida
-reaparecerá en el próximo inicio. **Continuar sin conexión + Guardar** es una
+reaparecerá en el próximo inicio. **Sin conexión + Guardar** es una
 preferencia persistente: no hay consulta inicial y los botones remotos quedan
 deshabilitados. No elimina la URL ni los directorios que ya estuvieran guardados.
+
+Cada modo conectado recuerda la última URL con la que lo guardó: si ajusta la
+dirección de **En este ordenador** o **En otro ordenador o contenedor**, ese
+valor reaparece como propuesta la próxima vez que elija ese modo. **Sin conexión**
+no recuerda ninguna URL y deja el campo vacío, sin permitir editarlo.
 
 El botón **Configuración**, en la cabecera, permite volver al diálogo. La URL de
 la cabecera conserva la edición rápida y guarda sus valores válidos; no sustituye
@@ -181,8 +188,9 @@ los del servidor activo. Los destinos guardados con una versión anterior quedan
 
 Se mantienen tres archivos separados del perfil del usuario:
 
-- `qbt-elrocho.json`: URL, directorios, modo, confirmación de configuración y
-  preferencia de consulta inicial. No contiene secretos.
+- `qbt-elrocho.json`: URL, directorios, modo, confirmación de configuración,
+  preferencia de consulta inicial y las URL por defecto recordadas para cada
+  modo conectado. No contiene secretos.
 - `qbt-elrocho.sqlite3`: catálogo local y correcciones; no contiene resultados
   de consultas remotas.
 - `qbt-elrocho.ini`: anchos de columnas.
@@ -192,16 +200,16 @@ es `~/.config/el-rocho/`; puede variar con el entorno. La ayuda emergente del bo
 muestra la ubicación del catálogo. En Windows use esas rutas efectivas, sin
 suponer un nombre de usuario ni una unidad concreta.
 
-La configuración JSON versión 1 y 2 se lee sin reescribirla al abrir. Si tenía
+La configuración JSON versión 1, 2 y 3 se lee sin reescribirla al abrir. Si tenía
 URL válida, conserva el arranque automático y sus directorios, incluso si la
 lista está vacía; al guardar, esos directorios se asocian a la URL guardada.
-Al guardar un ajuste se escribe la versión 3 de forma atómica. Si la versión
+Al guardar un ajuste se escribe la versión 4 de forma atómica. Si la versión
 anterior no tenía URL, se solicita configuración: no se reconstruye una IP a
 partir de antiguos valores embebidos.
 
 Antes de actualizar o volver a una versión anterior, haga una copia de los tres
 archivos con la aplicación cerrada. Las versiones antiguas pueden no admitir
-el JSON versión 3: restaure la copia compatible, no cambie el número de versión
+el JSON versión 4: restaure la copia compatible, no cambie el número de versión
 a mano. No comparta su catálogo sin revisar rutas y metadatos personales.
 
 ## Si algo falla

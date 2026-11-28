@@ -62,7 +62,7 @@ class ConfigFileTests(ConfigTempDir):
         )
         self.assertEqual(path.read_text(encoding="utf-8"), original)
         save(loaded, path)
-        self.assertEqual(json.loads(path.read_text(encoding="utf-8"))["version"], 3)
+        self.assertEqual(json.loads(path.read_text(encoding="utf-8"))["version"], 4)
         self.assertEqual(load(path), loaded)
 
     def test_v2_config_associates_existing_directories_with_base_url(self):
@@ -83,6 +83,39 @@ class ConfigFileTests(ConfigTempDir):
             loaded.directories,
             (DirectoryConfig("/library", "Libro", "http://servidor:8080"),),
         )
+
+    def test_v3_config_keeps_per_directory_server_and_empty_mode_urls(self):
+        path = self.dir / "v3.json"
+        path.write_text(
+            json.dumps({
+                "version": 3,
+                "base_url": "http://servidor:8080",
+                "connection_mode": "remote",
+                "setup_completed": True,
+                "query_on_startup": True,
+                "directories": [{"path": "/library", "kind": "Libro",
+                                 "server": "http://otro:8080"}],
+            }),
+            encoding="utf-8",
+        )
+        loaded = load(path)
+        self.assertEqual(
+            loaded.directories,
+            (DirectoryConfig("/library", "Libro", "http://otro:8080"),),
+        )
+        self.assertEqual(loaded.local_url, "")
+        self.assertEqual(loaded.remote_url, "")
+
+    def test_save_round_trips_remembered_mode_urls(self):
+        path = self.dir / "urls.json"
+        saved = AppConfig(
+            base_url="http://10.0.4.56:8080",
+            connection_mode="remote",
+            local_url="http://127.0.0.1:9090",
+            remote_url="http://192.168.0.50:8080",
+        )
+        save(saved, path)
+        self.assertEqual(load(path), saved)
 
     def test_missing_file_loads_default(self):
         self.assertEqual(load(self.dir / "inexistente.json"), AppConfig())
@@ -265,9 +298,15 @@ class ConfigValidationTests(unittest.TestCase):
 
 class ContractShapeTests(unittest.TestCase):
     def test_app_config_field_order_defaults_and_immutability(self):
-        self.assertEqual(list(AppConfig.__dataclass_fields__), ["base_url", "directories", "connection_mode", "setup_completed", "query_on_startup"])
+        self.assertEqual(
+            list(AppConfig.__dataclass_fields__),
+            ["base_url", "directories", "connection_mode", "setup_completed",
+             "query_on_startup", "local_url", "remote_url"],
+        )
         self.assertEqual(AppConfig.__dataclass_fields__["base_url"].default, "")
         self.assertEqual(AppConfig.__dataclass_fields__["directories"].default, ())
+        self.assertEqual(AppConfig.__dataclass_fields__["local_url"].default, "")
+        self.assertEqual(AppConfig.__dataclass_fields__["remote_url"].default, "")
         with self.assertRaises(AttributeError):
             config().base_url = "otra"
 

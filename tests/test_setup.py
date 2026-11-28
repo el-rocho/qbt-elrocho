@@ -228,6 +228,70 @@ class SetupTests(unittest.TestCase):
         client.assert_not_called()
         self.assertTrue(window._setup_dialog.isVisible())
 
+    def test_mode_selector_defaults_and_offline_url_empty(self):
+        window = self.window()
+        window.startup_query()
+        dialog = window._setup_dialog
+        self.assertEqual(dialog.mode_combo.itemText(0), "Sin conexión")
+        self.assertEqual(dialog.mode_combo.itemText(1), "En este ordenador")
+        self.assertEqual(dialog.mode_combo.itemText(2), "En otro ordenador o contenedor")
+        self.assertEqual(dialog.mode_combo.currentData(), "offline")
+        self.assertEqual(dialog.url_edit.text(), "")
+        self.assertFalse(dialog.url_edit.isEnabled())
+
+        dialog.mode_combo.setCurrentIndex(dialog.mode_combo.findData("local"))
+        self.assertEqual(dialog.url_edit.text(), "http://127.0.0.1:8080")
+        self.assertTrue(dialog.url_edit.isEnabled())
+
+        dialog.mode_combo.setCurrentIndex(dialog.mode_combo.findData("remote"))
+        self.assertEqual(dialog.url_edit.text(), "http://192.168.0.X:8080")
+        self.assertTrue(dialog.url_edit.isEnabled())
+
+        dialog.mode_combo.setCurrentIndex(dialog.mode_combo.findData("offline"))
+        self.assertEqual(dialog.url_edit.text(), "")
+        self.assertFalse(dialog.url_edit.isEnabled())
+
+    def test_switching_mode_keeps_typed_url_per_mode(self):
+        window = self.window()
+        window.startup_query()
+        dialog = window._setup_dialog
+        dialog.mode_combo.setCurrentIndex(dialog.mode_combo.findData("local"))
+        dialog.url_edit.setText("http://127.0.0.1:9999")
+        dialog.mode_combo.setCurrentIndex(dialog.mode_combo.findData("remote"))
+        self.assertEqual(dialog.url_edit.text(), "http://192.168.0.X:8080")
+        dialog.mode_combo.setCurrentIndex(dialog.mode_combo.findData("local"))
+        self.assertEqual(dialog.url_edit.text(), "http://127.0.0.1:9999")
+
+    def test_saving_mode_records_its_default_url_and_reopens_with_it(self):
+        window = self.window()
+        window.startup_query()
+        dialog = window._setup_dialog
+        dialog.mode_combo.setCurrentIndex(dialog.mode_combo.findData("local"))
+        dialog.url_edit.setText("http://127.0.0.1:9090")
+        dialog.save_button.click()
+        saved = load(self.path)
+        self.assertEqual(saved.base_url, "http://127.0.0.1:9090")
+        self.assertEqual(saved.local_url, "http://127.0.0.1:9090")
+        self.assertEqual(saved.remote_url, "")
+
+        window._open_connection_config()
+        dialog = window._setup_dialog
+        dialog.mode_combo.setCurrentIndex(dialog.mode_combo.findData("remote"))
+        dialog.url_edit.setText("http://192.168.0.50:8080")
+        dialog.save_button.click()
+        saved = load(self.path)
+        self.assertEqual(saved.local_url, "http://127.0.0.1:9090")
+        self.assertEqual(saved.remote_url, "http://192.168.0.50:8080")
+        self.assertEqual(saved.base_url, "http://192.168.0.50:8080")
+        self.assertEqual(saved.connection_mode, "remote")
+
+        window.close()
+        reopened = self.window()
+        reopened._open_connection_config()
+        dialog = reopened._setup_dialog
+        self.assertEqual(dialog.mode_combo.currentData(), "remote")
+        self.assertEqual(dialog.url_edit.text(), "http://192.168.0.50:8080")
+
 
 if __name__ == "__main__":
     unittest.main()

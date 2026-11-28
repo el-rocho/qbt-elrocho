@@ -14,7 +14,7 @@ import tempfile
 from dataclasses import dataclass, replace
 from pathlib import Path, PureWindowsPath
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 # Tipos de directorio. "Sin determinar" actúa como comodín (respaldo): un
 # directorio donde el usuario guarda archivos de cualquier tipo.
@@ -49,6 +49,10 @@ class AppConfig:
     connection_mode: str = "offline"
     setup_completed: bool = False
     query_on_startup: bool = True
+    # Valor por defecto recordado para cada modo conectado; vacío significa
+    # usar la sugerencia de fábrica de ese modo.
+    local_url: str = ""
+    remote_url: str = ""
 
 
 def _is_absolute_path(value: str) -> bool:
@@ -110,6 +114,14 @@ def _validate(config: AppConfig) -> AppConfig:
         raise ConfigError("Modo de conexión no válido")
     if type(config.setup_completed) is not bool or type(config.query_on_startup) is not bool:
         raise ConfigError("Las opciones de inicio deben ser booleanas")
+    for field, label in (("local_url", "local"), ("remote_url", "remoto")):
+        value = getattr(config, field)
+        if not isinstance(value, str):
+            raise ConfigError(f"La URL por defecto del modo {label} debe ser texto")
+        if any(ord(char) < 32 for char in value):
+            raise ConfigError(
+                f"La URL por defecto del modo {label} no puede contener caracteres de control"
+            )
     return replace(config, directories=validate_directories(config.directories))
 
 
@@ -131,12 +143,14 @@ def load(path: str | Path) -> AppConfig:
     if not isinstance(data, dict):
         raise ConfigError("La configuración debe ser un objeto JSON")
     version = data.get("version")
-    if type(version) is not int or version not in (1, 2, SCHEMA_VERSION):
+    if type(version) is not int or version not in (1, 2, 3, SCHEMA_VERSION):
         raise ConfigError(
             f"Versión de configuración desconocida: {version!r} "
             f"(se esperaba {SCHEMA_VERSION}); no se modifica el archivo"
         )
     base_url = data.get("base_url", "")
+    local_url = data.get("local_url", "")
+    remote_url = data.get("remote_url", "")
     directories = data.get("directories", [])
     if not isinstance(directories, list):
         raise ConfigError("El campo 'directories' debe ser una lista")
@@ -145,7 +159,7 @@ def load(path: str | Path) -> AppConfig:
         if not isinstance(entry, dict):
             raise ConfigError("Cada directorio debe ser un objeto JSON")
         # En v1 y v2 la lista era única para la URL guardada; se asocia a ella.
-        server = entry.get("server", "") if version == SCHEMA_VERSION else base_url
+        server = entry.get("server", "") if version >= 3 else base_url
         raw_directories.append(
             DirectoryConfig(entry.get("path", ""), entry.get("kind", ""), server)
         )
@@ -156,7 +170,13 @@ def load(path: str | Path) -> AppConfig:
          "setup_completed": data.get("setup_completed", False),
          "query_on_startup": data.get("query_on_startup", True)}
     )
-    return _validate(AppConfig(base_url=base_url, directories=tuple(raw_directories), **options))
+    return _validate(AppConfig(
+        base_url=base_url,
+        directories=tuple(raw_directories),
+        local_url=local_url,
+        remote_url=remote_url,
+        **options,
+    ))
 
 
 def save(config: AppConfig, path: str | Path) -> None:
@@ -173,6 +193,8 @@ def save(config: AppConfig, path: str | Path) -> None:
         "connection_mode": validated.connection_mode,
         "setup_completed": validated.setup_completed,
         "query_on_startup": validated.query_on_startup,
+        "local_url": validated.local_url,
+        "remote_url": validated.remote_url,
         "directories": [
             {"path": directory.path, "kind": directory.kind, "server": directory.server}
             for directory in validated.directories

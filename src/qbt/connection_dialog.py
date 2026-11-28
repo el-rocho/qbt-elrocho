@@ -6,12 +6,21 @@ from PySide6.QtWidgets import (
     QPushButton, QVBoxLayout,
 )
 
-LOCAL_URL_SUGGESTION = "http://localhost:8080"
+LOCAL_URL_SUGGESTION = "http://127.0.0.1:8080"
+REMOTE_URL_SUGGESTION = "http://192.168.0.X:8080"
+
+# Orden visible del selector; el valor interno no cambia (local/remote/offline).
+MODE_OPTIONS = (
+    ("Sin conexión", "offline"),
+    ("En este ordenador", "local"),
+    ("En otro ordenador o contenedor", "remote"),
+)
 
 
 class ConnectionDialog(QDialog):
     def __init__(self, config, parent=None):
         super().__init__(parent)
+        self._config = config
         self.setWindowTitle("Configurar qBittorrent")
         self.setMinimumWidth(580)
         layout = QVBoxLayout(self)
@@ -22,26 +31,28 @@ class ConnectionDialog(QDialog):
         intro.setWordWrap(True)
         layout.addWidget(intro)
         self.mode_combo = QComboBox()
-        for label, value in (
-            ("En este ordenador", "local"),
-            ("En otro ordenador o contenedor", "remote"),
-            ("Continuar sin conexión", "offline"),
-        ):
+        for label, value in MODE_OPTIONS:
             self.mode_combo.addItem(label, value)
         self.mode_combo.setCurrentIndex(self.mode_combo.findData(config.connection_mode))
         layout.addWidget(self.mode_combo)
         layout.addWidget(QLabel("URL de la WebUI de qBittorrent:"))
-        self.url_edit = QLineEdit(config.base_url or (
-            LOCAL_URL_SUGGESTION if config.connection_mode == "local" else ""
-        ))
+        # Valor por defecto recordado para cada modo conectado; la URL del modo
+        # activo se conserva al cambiar de opción y vuelve al volver.
+        self._mode_urls = {
+            "local": self._default_url("local"),
+            "remote": self._default_url("remote"),
+            "offline": "",
+        }
+        self.url_edit = QLineEdit(self._mode_urls.get(config.connection_mode, ""))
         self.url_edit.setPlaceholderText("http(s)://servidor:puerto")
         layout.addWidget(self.url_edit)
         hint = QLabel(
-            "localhost:8080 es solo una sugerencia: compruebe la dirección y el puerto "
-            "de la WebUI. La sesión del navegador no se comparte. No desactive la "
-            "autenticación del servidor; puede introducir sus credenciales aquí "
-            "o continuar con la revisión local. HTTP no cifra las credenciales: "
-            "utilice HTTPS fuera de un entorno de confianza."
+            "Las direcciones prellenadas son solo sugerencias: compruebe la dirección y "
+            "el puerto de la WebUI. En «En otro ordenador o contenedor» sustituya la X de "
+            "192.168.0.X por la dirección real del equipo. La sesión del navegador no se "
+            "comparte. No desactive la autenticación del servidor; puede introducir sus "
+            "credenciales aquí o continuar con la revisión local. HTTP no cifra las "
+            "credenciales: utilice HTTPS fuera de un entorno de confianza."
         )
         hint.setWordWrap(True)
         layout.addWidget(hint)
@@ -79,8 +90,8 @@ class ConnectionDialog(QDialog):
             row.addWidget(button)
         layout.addLayout(row)
         self._busy = False
-        self.mode_combo.currentIndexChanged.connect(self._update_mode)
-        self.mode_combo.currentIndexChanged.connect(self._clear_probe_result)
+        self._previous_mode = config.connection_mode
+        self.mode_combo.currentIndexChanged.connect(self._on_mode_changed)
         self.url_edit.textChanged.connect(self._clear_probe_result)
         self.auth_check.toggled.connect(self._update_mode)
         self.auth_check.toggled.connect(self._clear_probe_result)
@@ -89,6 +100,19 @@ class ConnectionDialog(QDialog):
         self.finished.connect(self.clear_credentials)
         self._update_mode()
 
+    def _default_url(self, mode: str) -> str:
+        """Valor por defecto del modo: lo recordado, la URL activa de ese modo
+        o la sugerencia de fábrica, en ese orden."""
+        if mode == "local":
+            remembered = self._config.local_url
+            active = self._config.base_url if self._config.connection_mode == "local" else ""
+            return remembered or active or LOCAL_URL_SUGGESTION
+        if mode == "remote":
+            remembered = self._config.remote_url
+            active = self._config.base_url if self._config.connection_mode == "remote" else ""
+            return remembered or active or REMOTE_URL_SUGGESTION
+        return ""
+
     def clear_credentials(self):
         self.username_edit.clear()
         self.password_edit.clear()
@@ -96,6 +120,16 @@ class ConnectionDialog(QDialog):
     def _clear_probe_result(self):
         self.status_label.setStyleSheet("")
         self.status_label.setText("Configuración modificada; conexión pendiente de comprobar.")
+
+    def _on_mode_changed(self, _index):
+        """Cambia el modo y recuerda lo escrito en el modo que se abandona."""
+        mode = self.mode_combo.currentData()
+        if mode != self._previous_mode:
+            self._mode_urls[self._previous_mode] = self.url_edit.text()
+            self._previous_mode = mode
+            self.url_edit.setText(self._mode_urls.get(mode, ""))
+        self._update_mode()
+        self._clear_probe_result()
 
     def _update_mode(self):
         offline = self.mode_combo.currentData() == "offline"
