@@ -35,7 +35,7 @@ from .config import (
     load as load_config,
     save as save_config,
 )
-from .connection_dialog import ConnectionDialog, LOCAL_URL_SUGGESTION
+from .connection_dialog import ConnectionDialog, URL_PLACEHOLDER
 from .directory_dialog import DirectoryConfigDialog
 from .local_review import LocalReviewPanel
 from .qbittorrent import QBittorrentClient, QBittorrentError
@@ -305,7 +305,7 @@ class MainWindow(QMainWindow):
                 except ConfigError as exc:
                     self._config_load_error = str(exc)
         initial_url = ""
-        if self._app_config.base_url:
+        if self._app_config.base_url and self._app_config.connection_mode != "offline":
             try:
                 initial_url = validate_base_url(self._app_config.base_url)
             except ValueError as exc:
@@ -352,7 +352,7 @@ class MainWindow(QMainWindow):
         url_row = QHBoxLayout()
         url_row.addWidget(QLabel("URL de la WebUI:"))
         self.url_edit = QLineEdit(initial_url)
-        self.url_edit.setPlaceholderText(LOCAL_URL_SUGGESTION)
+        self.url_edit.setPlaceholderText(URL_PLACEHOLDER)
         self.url_edit.textChanged.connect(self._on_url_changed)
         url_row.addWidget(self.url_edit, 1)
         self.connection_config_button = QPushButton("Configuración")
@@ -882,7 +882,7 @@ class MainWindow(QMainWindow):
             )
             return
         try:
-            url = (self._app_config.base_url if mode == "offline"
+            url = ("" if mode == "offline"
                    else validate_base_url(dialog.url_edit.text()))
         except ValueError as exc:
             dialog.status_label.setText(str(exc))

@@ -8,6 +8,7 @@ from PySide6.QtWidgets import (
 
 LOCAL_URL_SUGGESTION = "http://127.0.0.1:8080"
 REMOTE_URL_SUGGESTION = "http://192.168.0.X:8080"
+URL_PLACEHOLDER = "http(s)://servidor:puerto"
 
 # Orden visible del selector; el valor interno no cambia (local/remote/offline).
 MODE_OPTIONS = (
@@ -44,7 +45,7 @@ class ConnectionDialog(QDialog):
             "offline": "",
         }
         self.url_edit = QLineEdit(self._mode_urls.get(config.connection_mode, ""))
-        self.url_edit.setPlaceholderText("http(s)://servidor:puerto")
+        self.url_edit.setPlaceholderText(URL_PLACEHOLDER)
         layout.addWidget(self.url_edit)
         hint = QLabel(
             "Las direcciones prellenadas son solo sugerencias: compruebe la dirección y "

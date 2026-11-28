@@ -65,7 +65,8 @@ deshabilitados hasta que confirme una conexión.
 seguir revisando archivos locales; si no completó la configuración, la bienvenida
 reaparecerá en el próximo inicio. **Sin conexión + Guardar** es una
 preferencia persistente: no hay consulta inicial y los botones remotos quedan
-deshabilitados. No elimina la URL ni los directorios que ya estuvieran guardados.
+deshabilitados. Deja la URL activa vacía, pero conserva los directorios y las
+URL recordadas de los modos conectados.
 
 Cada modo conectado recuerda la última URL con la que lo guardó: si ajusta la
 dirección de **En este ordenador** o **En otro ordenador o contenedor**, ese

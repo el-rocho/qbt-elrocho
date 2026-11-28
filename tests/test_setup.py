@@ -292,6 +292,37 @@ class SetupTests(unittest.TestCase):
         self.assertEqual(dialog.mode_combo.currentData(), "remote")
         self.assertEqual(dialog.url_edit.text(), "http://192.168.0.50:8080")
 
+    def test_header_url_empty_with_generic_placeholder_in_offline_mode(self):
+        # Una configuración heredada en modo sin conexión podía conservar una
+        # URL activa: la cabecera debe quedar vacía y mostrar el marcador genérico.
+        save(AppConfig(base_url="http://10.0.4.56:8080", connection_mode="offline",
+                       setup_completed=True), self.path)
+        window = self.window()
+        self.assertEqual(window.url_edit.text(), "")
+        self.assertEqual(window.url_edit.placeholderText(), "http(s)://servidor:puerto")
+        self.assertFalse(window.url_edit.isEnabled())
+
+    def test_saving_offline_clears_active_url_but_keeps_remembered_urls(self):
+        window = self.window()
+        window.startup_query()
+        dialog = window._setup_dialog
+        dialog.mode_combo.setCurrentIndex(dialog.mode_combo.findData("remote"))
+        dialog.url_edit.setText("http://192.168.0.50:8080")
+        dialog.save_button.click()
+        saved = load(self.path)
+        self.assertEqual(saved.base_url, "http://192.168.0.50:8080")
+        self.assertEqual(saved.remote_url, "http://192.168.0.50:8080")
+
+        window._open_connection_config()
+        dialog = window._setup_dialog
+        dialog.mode_combo.setCurrentIndex(dialog.mode_combo.findData("offline"))
+        dialog.save_button.click()
+        saved = load(self.path)
+        self.assertEqual(saved.base_url, "")
+        self.assertEqual(saved.connection_mode, "offline")
+        self.assertEqual(saved.remote_url, "http://192.168.0.50:8080")
+        self.assertEqual(window.url_edit.text(), "")
+
 
 if __name__ == "__main__":
     unittest.main()
