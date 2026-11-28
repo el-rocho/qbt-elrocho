@@ -49,9 +49,11 @@ a la cabecera de conexión; Revisión local conserva su estilo.
 
 - **Revisión local (superior):** selección y lectura de `.torrent`, clasificación
   heurística y catálogo SQLite. Permite corregir tipo, título y temporada,
-  elegir un destino y marcar Incluir. Botones «Quitar selección» y «Limpiar
-  todo» eliminan revisiones del catálogo local **sin borrar los archivos
-  .torrent del disco**; «Limpiar todo» pide confirmación. Los archivos
+  elegir un destino y marcar Incluir. La lista muestra solo las revisiones
+  asociadas al servidor conectado; al cambiar de URL se ocultan las de otros
+  servidores (que se conservan). Botones «Quitar selección» y «Limpiar
+  todo» eliminan revisiones del servidor activo del catálogo local **sin borrar
+  los archivos .torrent del disco**; «Limpiar todo» pide confirmación. Los archivos
   originales no se modifican,
   no se abren conexiones desde este panel y marcar una fila **no envía ni
   aprueba un lote**. Las tablas remotas continúan sin permitir edición.
@@ -164,7 +166,9 @@ los destinos de las filas revisadas.
   Borrar los directorios no elimina las propuestas procedentes del catálogo.
   **Aislamiento por servidor:** cada directorio configurado y cada destino
   guardado se asocia a la URL del servidor con la que se definió; al cambiar de
-  instalación solo se ofrecen y consultan los del servidor activo. Los destinos
+  instalación solo se ofrecen y consultan los del servidor activo. Cada revisión
+  del catálogo también se asocia al servidor con el que se añadió, y la sección
+  Revisión local solo muestra las del servidor activo. Los destinos
   guardados con una versión anterior quedan «sin servidor» y no se ofrecen
   automáticamente hasta volver a elegirlos. La aplicación no añade subcarpetas
   de serie/temporada: la estructura del torrent y la configuración del servidor
@@ -205,7 +209,8 @@ los destinos de las filas revisadas.
   pueden introducir pausas. El trabajo de red sigue en segundo plano.
 - **Conservación:** la base mantiene el último estado por ruta de origen hasta
   que el usuario la quite con «Quitar selección» o la vacíe con «Limpiar todo»
-  (ambas solo afectan al catálogo, no al archivo `.torrent`). Queda pendiente
+  (ambas solo afectan a las revisiones del servidor activo, no al archivo
+  `.torrent`; las de otros servidores se conservan). Queda pendiente
   caducidad automática, auditoría de cada cambio e historial de envíos.
 
 ### Capturas

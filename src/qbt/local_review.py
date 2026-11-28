@@ -98,6 +98,16 @@ class LocalReviewPanel(QGroupBox):
             if updated != record and not self._save(updated):
                 break
 
+    def _visible_records(self) -> list[LocalRecord]:
+        """Registros del servidor activo; los de otros servidores se ocultan."""
+        server = self._server()
+        return [record for record in self._records if record.server == server]
+
+    def refresh(self) -> None:
+        """Actualiza el resumen y la tabla con el servidor activo."""
+        self._summary()
+        self._render()
+
     def _error(self, message: str) -> None:
         self.status_label.setStyleSheet("color: #b00020;")
         self.status_label.setText(message)
@@ -117,8 +127,13 @@ class LocalReviewPanel(QGroupBox):
             self._error(self._last_save_error)
             return
         self.status_label.setStyleSheet("")
+        visible = self._visible_records()
+        hidden = len(self._records) - len(visible)
+        server = self._server()
+        scope = f" del servidor «{server}»" if server else " (sin servidor)"
+        hidden_text = f" · {hidden} de otro servidor oculta(s)" if hidden else ""
         self.status_label.setText(
-            f"{len(self._records)} revisión(es) guardada(s) localmente. "
+            f"{len(visible)} revisión(es){scope}{hidden_text}. "
             "Edite tipo, título, temporada y destino; Incluir no envía nada. "
             "Las rutas dependen de cada usuario; no se crean subcarpetas. "
             + ("Sin consulta remota: no se conoce el estado actual del servidor."
@@ -176,7 +191,8 @@ class LocalReviewPanel(QGroupBox):
                                  destination, not error and previous is None, error,
                                  server=self._server())
             exact, _similar = find_matches(v1, v2, record.title,
-                                            [asdict(r) for r in self._records if r.source != source]
+                                            [asdict(r) for r in self._records
+                                             if r.source != source and r.server == self._server()]
                                             + (self._remote_torrents or []))
             if exact:
                 record = replace(record, included=False)
@@ -207,7 +223,7 @@ class LocalReviewPanel(QGroupBox):
             return record.error
         exact, similar = find_matches(
             record.info_hash_v1, record.info_hash_v2, record.title,
-            [asdict(r) for r in self._records if r.source != record.source],
+            [asdict(r) for r in self._visible_records() if r.source != record.source],
         )
         remote_exact, remote_similar = find_matches(
             record.info_hash_v1, record.info_hash_v2, record.title,
@@ -232,8 +248,9 @@ class LocalReviewPanel(QGroupBox):
         self._rendering = True
         self.table.blockSignals(True)
         try:
-            self.table.setRowCount(len(self._records))
-            for row, record in enumerate(self._records):
+            records = self._visible_records()
+            self.table.setRowCount(len(records))
+            for row, record in enumerate(records):
                 values = [Path(record.source).name, record.kind, record.title,
                           f"{record.season:02d}" if record.season is not None else "—",
                           record.confidence, record.destination, "", self._warnings(record)]
@@ -314,7 +331,7 @@ class LocalReviewPanel(QGroupBox):
     def _item_changed(self, item: QTableWidgetItem) -> None:
         if self._rendering:
             return
-        record = self._records[item.row()]
+        record = self._visible_records()[item.row()]
         column, text = item.column(), item.text().strip()
         changes = {}
         if column == 2:
@@ -348,8 +365,9 @@ class LocalReviewPanel(QGroupBox):
 
     def _selected_sources(self) -> list[str]:
         rows = sorted({index.row() for index in self.table.selectedIndexes()}, reverse=True)
+        records = self._visible_records()
         return [
-            self._records[row].source for row in rows if 0 <= row < len(self._records)
+            records[row].source for row in rows if 0 <= row < len(records)
         ]
 
     def remove_selected(self) -> None:
@@ -372,15 +390,19 @@ class LocalReviewPanel(QGroupBox):
         self._render()
 
     def clear_all(self) -> None:
-        """Vacía la revisión local tras confirmar; no borra los archivos .torrent."""
+        """Vacía la revisión del servidor activo tras confirmar; no borra .torrent."""
         if self._catalog is None or not self.commit_edits():
             return
-        if not self._records:
+        sources = [record.source for record in self._visible_records()]
+        if not sources:
             return
+        server = self._server()
+        scope = f" del servidor «{server}»" if server else " (sin servidor)"
         answer = QMessageBox.question(
             self,
             "Limpiar el catálogo",
-            "Se quitarán todas las revisiones guardadas localmente. "
+            f"Se quitarán todas las revisiones guardadas{scope}. "
+            "Las de otros servidores se conservan. "
             "Los archivos .torrent del disco no se borran.",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             QMessageBox.StandardButton.No,
@@ -388,11 +410,13 @@ class LocalReviewPanel(QGroupBox):
         if answer != QMessageBox.StandardButton.Yes:
             return
         try:
-            self._catalog.clear()
+            for source in sources:
+                self._catalog.delete(source)
         except CatalogError as exc:
             self._error(f"No se limpió el catálogo; queda intacto. {exc}")
             return
-        self._records = []
+        removed = set(sources)
+        self._records = [record for record in self._records if record.source not in removed]
         self._last_save_error = None
         self._summary()
         self._render()
@@ -403,7 +427,7 @@ class LocalReviewPanel(QGroupBox):
         self._remote_torrents = torrents
         failed = False
         if torrents is not None and self._catalog is not None:
-            for record in list(self._records):
+            for record in list(self._visible_records()):
                 exact, _similar = find_matches(record.info_hash_v1, record.info_hash_v2,
                                                record.title, torrents)
                 if exact and record.included:

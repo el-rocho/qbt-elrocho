@@ -692,8 +692,8 @@ class MainWindow(QMainWindow):
         had_rows = bool(self.torrents_table.rowCount() or any(
             table.rowCount() for table in self.directory_tables.values()
         ))
-        self._reset_connection()
         self._persist_url(text)
+        self._reset_connection()
         self._rebuild_directory_tabs()
         self._restore_column_widths()
         self._set_busy(self.busy)
@@ -896,6 +896,7 @@ class MainWindow(QMainWindow):
                 or self._setup_capabilities is not None):
             self._reset_connection()
         self._rebuild_directory_tabs()
+        self.local_group.refresh()
         self._restore_column_widths()
         if (self._setup_client is not None and self._setup_capabilities is not None
                 and mode != "offline" and self._setup_client.base_url == url):

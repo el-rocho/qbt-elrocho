@@ -76,15 +76,17 @@ class LocalReviewTests(unittest.TestCase):
         source = self.root / "DEMO.Serie.S02E01.torrent"
         make_torrent(source)
         window = self.window()
+        window.url_edit.setText("http://servidor-a")
         window.import_files([str(source)])
         identity = read_torrent(source)
         window._fill_torrents([{"name": "Servidor DEMO", "hash": identity.info_hash_v1}])
         self.assertEqual(window.local_table.item(0, 6).checkState(), Qt.Unchecked)
         self.assertIn("remoto", window.local_table.item(0, 7).text())
-        window.url_edit.setText("http://127.0.0.1:12345")
-        self.assertNotIn("remoto", window.local_table.item(0, 7).text())
+        # Cambiar de servidor descarta los datos remotos y oculta el registro anterior.
+        window.url_edit.setText("http://servidor-b")
+        self.assertEqual(window.local_table.rowCount(), 0)
         self.assertIn("Sin consulta remota", window.local_status_label.text())
-        self.assertEqual(window.local_table.item(0, 6).checkState(), Qt.Unchecked)
+        self.assertFalse(window.local_group._records[0].included)
 
     def test_multiple_series_roots_require_choice_without_appending_title_or_season(self):
         source = self.root / "DEMO.Serie.S02E01.torrent"
@@ -666,10 +668,33 @@ class LocalReviewTests(unittest.TestCase):
         other = self.root / "DEMO.Serie.S02E02.torrent"
         make_torrent(other, byte=b"b")
         window.import_files([str(other)])
-        combo_b = window.local_table.cellWidget(1, 5)
+        # Solo el registro del servidor B queda visible; el de A se oculta.
+        self.assertEqual(window.local_table.rowCount(), 1)
+        combo_b = window.local_table.cellWidget(0, 5)
         self.assertEqual(combo_b.currentText(), "/mnt/b")
         choices = {combo_b.itemText(i) for i in range(combo_b.count())}
         self.assertNotIn("/mnt/a/serie-especifica", choices)
+
+    def test_review_list_shows_only_the_current_server_records(self):
+        first = self.root / "DEMO.Serie.S02E01.torrent"
+        make_torrent(first)
+        window = self.window()
+        window.url_edit.setText("http://servidor-a")
+        window.import_files([str(first)])
+        self.assertEqual(window.local_table.rowCount(), 1)
+        self.assertEqual(window.local_table.item(0, 0).text(), Path(first).name)
+        # Cambiar de servidor oculta el registro del servidor anterior.
+        window.url_edit.setText("http://servidor-b")
+        self.assertEqual(window.local_table.rowCount(), 0)
+        second = self.root / "DEMO.Serie.S02E02.torrent"
+        make_torrent(second, byte=b"b")
+        window.import_files([str(second)])
+        self.assertEqual(window.local_table.rowCount(), 1)
+        self.assertEqual(window.local_table.item(0, 0).text(), Path(second).name)
+        # Volver al servidor A muestra solo su registro.
+        window.url_edit.setText("http://servidor-a")
+        self.assertEqual(window.local_table.rowCount(), 1)
+        self.assertEqual(window.local_table.item(0, 0).text(), Path(first).name)
 
 
 if __name__ == "__main__":
